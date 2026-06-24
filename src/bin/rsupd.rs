@@ -6,6 +6,7 @@
 //! rsupd id show    [--project N]
 //! rsupd id export  [--project N] [-o FILE]
 //! rsupd build      [--project-dir DIR] [--channel C] [--target T]... [--bin B]...
+//!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
 //!                  [--no-compress] [-o OUT.zip]
 //! rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
 //! ```
@@ -123,6 +124,9 @@ fn run_build(args: &[String]) -> rsupd::Result<()> {
     build.channel = opts.channel.clone().unwrap_or_default();
     build.targets = opts.targets.clone();
     build.bins = opts.bins.clone();
+    if let Some(naming) = &opts.naming {
+        build.naming = rsupd::TargetNaming::parse(naming)?;
+    }
     if opts.no_compress {
         build.compression = "none".to_string();
     }
@@ -217,6 +221,7 @@ struct Flags {
     channel: Option<String>,
     output: Option<PathBuf>,
     fingerprint: Option<String>,
+    naming: Option<String>,
     targets: Vec<String>,
     bins: Vec<String>,
     password: bool,
@@ -240,6 +245,7 @@ impl Flags {
                 "--channel" | "-c" => f.channel = Some(take()),
                 "--output" | "-o" => f.output = Some(PathBuf::from(take())),
                 "--fingerprint" => f.fingerprint = Some(take()),
+                "--naming" => f.naming = Some(take()),
                 "--target" | "-t" => f.targets.push(take()),
                 "--bin" | "-b" => f.bins.push(take()),
                 "--password" => f.password = true,
@@ -291,7 +297,7 @@ USAGE:
   rsupd id show    [--project N] [--password]
   rsupd id export  [--project N] [--password] [-o FILE]
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
-                   [--no-compress] [--project N] [-o OUT.zip]
+                   [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
 
 Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/."

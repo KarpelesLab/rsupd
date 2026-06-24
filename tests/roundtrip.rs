@@ -47,6 +47,39 @@ fn build_demo_package(root: &Path, identity: &Identity) -> rsupd::package::Built
 }
 
 #[test]
+fn triple_named_artifacts_match_host() {
+    let root = scratch("triple");
+    let binary = b"triple-named binary".repeat(50);
+    stage_project(&root, &binary);
+    let identity = Identity::generate("demo").unwrap();
+    let fingerprint = identity.fingerprint();
+
+    // Build with full-triple naming instead of os_arch.
+    let mut opts = BuildOptions::new(&root);
+    opts.naming = rsupd::TargetNaming::Triple;
+    let built = package::build_package(&identity, &opts).expect("build package");
+
+    // The artifact is keyed by the full triple, and the zip entry uses it.
+    let manifest = Manifest::open_and_verify(&built.signed_manifest, &fingerprint).expect("verify");
+    assert!(manifest.artifact_for(rsupd::TARGET).is_some());
+    assert!(manifest.artifact_for_host().is_some());
+
+    // The updater still finds and installs it (host triple matches).
+    let updater = Updater::builder("demo", "0.1.0")
+        .fingerprint(fingerprint)
+        .auto_restart(false)
+        .transport(Box::new(ZipPackageTransport::from_bytes(built.bytes)))
+        .build()
+        .unwrap();
+    let available = updater.check().unwrap().expect("update available");
+    let dest = root.join("installed");
+    updater.install_to(&available, &dest).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), binary);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn full_roundtrip_install() {
     let root = scratch("roundtrip");
     let binary = b"#!/bin/sh\necho rsupd demo v2\n".repeat(200);

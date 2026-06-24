@@ -16,8 +16,43 @@ use crate::manifest::{Artifact, FORMAT_VERSION, Hash, Manifest};
 
 pub use discover::{DiscoveredProject, discover};
 
+// `TargetNaming` is defined below and re-exported at the crate root.
+
 /// The standard archive path inside a package zip.
 pub const MANIFEST_ENTRY: &str = "manifest.cbor";
+
+/// How artifacts are identified and named within a package.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TargetNaming {
+    /// Compact `os_arch` label, e.g. `linux_amd64` (goupd convention). One slot
+    /// per OS/arch; cannot distinguish e.g. glibc from musl. The default.
+    #[default]
+    OsArch,
+    /// Full Rust target triple, e.g. `x86_64-unknown-linux-musl`. Use when a
+    /// single `os_arch` is not specific enough (multiple libc/ABI variants).
+    Triple,
+}
+
+impl TargetNaming {
+    /// Parses a naming mode from a CLI string (`os_arch` / `osarch` / `triple`).
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "os_arch" | "osarch" | "os-arch" => Ok(TargetNaming::OsArch),
+            "triple" => Ok(TargetNaming::Triple),
+            other => Err(Error::Other(format!(
+                "unknown target naming {other:?} (use os_arch or triple)"
+            ))),
+        }
+    }
+
+    /// The artifact target identity for a Rust `triple` under this naming.
+    pub fn label_for(self, triple: &str) -> String {
+        match self {
+            TargetNaming::OsArch => crate::target::label_for_triple(triple),
+            TargetNaming::Triple => triple.to_string(),
+        }
+    }
+}
 
 /// Options controlling a package build.
 pub struct BuildOptions {
@@ -33,6 +68,8 @@ pub struct BuildOptions {
     pub bins: Vec<String>,
     /// Compression for artifacts: `"zstd"` (default) or `"none"`.
     pub compression: String,
+    /// How to name/identify artifacts (`os_arch` label or full triple).
+    pub naming: TargetNaming,
 }
 
 impl BuildOptions {
@@ -45,6 +82,7 @@ impl BuildOptions {
             targets: Vec::new(),
             bins: Vec::new(),
             compression: "zstd".to_string(),
+            naming: TargetNaming::default(),
         }
     }
 }
@@ -98,13 +136,14 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
     let mut zw = zip::ZipWriter::new();
     let mut artifacts = Vec::new();
 
-    // Track which triple produced each `os_arch` label so we can reject two
-    // builds (e.g. linux gnu vs musl) that would collide on the same label.
+    // Track which triple produced each artifact label so we can reject two
+    // builds (e.g. linux gnu vs musl) that would collide on the same os_arch
+    // label. In `triple` naming, labels are unique and this never fires.
     let mut seen_labels: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
     for triple in &targets {
-        let label = crate::target::label_for_triple(triple);
+        let label = opts.naming.label_for(triple);
         for bin in &bins {
             let Some(path) = discover::find_binary(&project.root, triple, bin) else {
                 continue;
@@ -113,8 +152,9 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
                 && &prev != triple
             {
                 return Err(Error::Other(format!(
-                    "targets {prev:?} and {triple:?} both map to label {label:?} for binary \
-                     {bin:?}; build only one per os_arch or disambiguate the triples"
+                    "targets {prev:?} and {triple:?} both map to os_arch label {label:?} for \
+                     binary {bin:?}; build only one per os_arch, or use triple naming \
+                     (--naming triple) to keep them distinct"
                 )));
             }
 

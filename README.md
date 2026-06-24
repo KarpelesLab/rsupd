@@ -45,11 +45,17 @@ rsupd inspect myapp.zip
 ```
 
 The package is a plain store-mode `.zip` (`unzip`-readable) containing `manifest.cbor`
-plus one zstd-compressed archive per target, named flat as `<bin>_<os>_<arch>.zst`
-(e.g. `rsupd_linux_amd64.zst`). Artifacts are identified by their compact `os_arch`
-label (goupd convention); the updater derives the running host's label from its target
-triple to pick the right one. This is the single file you upload; the hosting API is
-pluggable (see below).
+plus one zstd-compressed archive per target, named flat (no slashes) as
+`<bin>_<target>.zst`. Targets are named one of two ways, chosen with `--naming`:
+
+- `os_arch` (default) — compact goupd-style label, e.g. `rsupd_linux_amd64.zst`. One
+  slot per OS/arch.
+- `triple` — full Rust target triple, e.g. `rsupd_x86_64-unknown-linux-musl.zst`. Use
+  when a single `os_arch` is not specific enough (e.g. shipping both glibc and musl).
+
+The consumer accepts **either** scheme: it matches an artifact whose target equals its
+full triple (preferred) or its `os_arch` label. This is the single file you upload; the
+hosting API is pluggable (see below).
 
 ## Consumer (library)
 

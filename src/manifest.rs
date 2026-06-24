@@ -95,9 +95,21 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Returns the artifact whose target equals `target`, if present.
+    /// Returns the artifact whose target equals `target`, if present. `target`
+    /// may be a full Rust triple or a compact `os_arch` label, depending on how
+    /// the release was named.
     pub fn artifact_for(&self, target: &str) -> Option<&Artifact> {
         self.artifacts.iter().find(|a| a.target == target)
+    }
+
+    /// Returns the artifact matching the running host, accepting either naming
+    /// scheme: it prefers an exact full-triple match ([`crate::TARGET`]) and
+    /// falls back to the compact `os_arch` label ([`crate::current_label`]). This
+    /// lets a producer name artifacts by triple or by `os_arch` and still be
+    /// found by the right consumer.
+    pub fn artifact_for_host(&self) -> Option<&Artifact> {
+        self.artifact_for(crate::TARGET)
+            .or_else(|| self.artifact_for(&crate::target::current_label()))
     }
 
     /// Encodes the manifest as a standalone (unsigned) CBOR document.

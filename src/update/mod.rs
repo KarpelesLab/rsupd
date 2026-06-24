@@ -90,11 +90,9 @@ impl Updater {
             // Different channel: not an update for us.
             return Ok(None);
         }
-        // It must carry an artifact for our os_arch label, or it is not actionable.
-        if manifest
-            .artifact_for(&crate::target::current_label())
-            .is_none()
-        {
+        // It must carry an artifact for our host (triple or os_arch), or it is
+        // not actionable.
+        if manifest.artifact_for_host().is_none() {
             return Ok(None);
         }
         if self.is_newer(&manifest) {
@@ -115,11 +113,13 @@ impl Updater {
     /// Like [`install`](Self::install) but writes to an explicit path (used by
     /// tests and for installing somewhere other than the running binary).
     pub fn install_to(&self, available: &Available, target: &Path) -> Result<()> {
-        let label = crate::target::current_label();
-        let artifact = available
-            .manifest
-            .artifact_for(&label)
-            .ok_or_else(|| Error::NoArtifact(format!("no artifact for target {label}")))?;
+        let artifact = available.manifest.artifact_for_host().ok_or_else(|| {
+            Error::NoArtifact(format!(
+                "no artifact for {} ({})",
+                crate::TARGET,
+                crate::target::current_label()
+            ))
+        })?;
         let stored = self
             .transport
             .fetch_artifact(&self.project, &self.channel, artifact)?;

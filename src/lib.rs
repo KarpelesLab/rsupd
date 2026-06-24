@@ -39,6 +39,7 @@ pub mod update;
 pub use error::{Error, Result};
 pub use identity::Identity;
 pub use manifest::{Artifact, Hash, Manifest};
+pub use package::TargetNaming;
 pub use target::{current_label, label_for_triple};
 pub use update::{Transport, Updater, ZipPackageTransport};
 
