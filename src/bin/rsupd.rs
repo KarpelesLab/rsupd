@@ -70,8 +70,20 @@ fn run_id(args: &[String]) -> rsupd::Result<()> {
             println!("project:     {project}");
             println!("fingerprint: {}", hex(&id.fingerprint()));
             println!("self_key:    {} bytes (PKIX)", card.self_key.len());
-            println!("subkeys:     {}", card.subkeys.len());
             println!("issued:      {}", card.issued);
+            println!("subkeys:     {}", card.subkeys.len());
+            for sub in &card.subkeys {
+                let role = if sub.key == card.self_key {
+                    " (self)"
+                } else {
+                    ""
+                };
+                println!(
+                    "  - [{}] {} bytes{role}",
+                    sub.purposes.join(","),
+                    sub.key.len()
+                );
+            }
             Ok(())
         }
         Some("export") => {

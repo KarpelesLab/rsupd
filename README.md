@@ -15,10 +15,12 @@ program.
 
 ## Trust model
 
-Each project owns an Ed25519 keypair, stored as an `IDCard` + keychain at
-`~/.config/rsupd/<project>/identity.bin`. A release **manifest** is sealed in a signed
-bottle. A consumer binary embeds only the **32-byte SHA-256 fingerprint** of the project's
-public key. On update it checks, in order:
+Each project owns two keys — an **Ed25519 signing key** (the primary/self key) and an
+**X25519 encryption key** — stored as an `IDCard` + keychain at
+`~/.config/rsupd/<project>/identity.bin`. The IDCard advertises both (purposes `sign` and
+`decrypt`). A release **manifest** is sealed in a signed bottle. A consumer binary embeds
+only the **32-byte SHA-256 fingerprint** of the project's *signing* key. On update it
+checks, in order:
 
 1. the manifest bottle opens,
 2. its embedded IDCard is validly self-signed,

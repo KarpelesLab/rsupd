@@ -4,19 +4,22 @@
 //! array `[version, keychain_bytes, signed_idcard_bytes]`:
 //!
 //! * `keychain_bytes` is a [`bottlers::Keychain`] serialization (optionally
-//!   PBES2-encrypted under a password) holding the private signing key.
+//!   PBES2-encrypted under a password) holding the private keys.
 //! * `signed_idcard_bytes` is the self-signed [`bottlers::IDCard`] — the public
 //!   half a consumer can use to verify releases.
 //!
-//! The signing key is Ed25519. The identity's *fingerprint* — the SHA-256 of the
-//! primary public key's PKIX/DER encoding — is the 32-byte trust anchor a
-//! consumer embeds in its binary.
+//! The keychain holds two keys with separated roles: an **Ed25519 signing key**
+//! (the primary / self key, purpose `"sign"`) and an **X25519 encryption key**
+//! (a subkey, purpose `"decrypt"`). The IDCard advertises both. The identity's
+//! *fingerprint* — the SHA-256 of the signing key's PKIX/DER encoding — is the
+//! 32-byte trust anchor a consumer embeds in its binary.
 
 use std::path::Path;
 
-use bottlers::{IDCard, Keychain, PrivateKey};
+use bottlers::{IDCard, Keychain, PrivateKey, PublicKey};
 use ciborium::value::Value;
 use purecrypto::ec::Ed25519PrivateKey;
+use purecrypto::ec::x25519::X25519PrivateKey;
 use purecrypto::rng::OsRng;
 
 use crate::config;
@@ -37,13 +40,24 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Generates a brand-new identity for `project` (fresh Ed25519 key,
-    /// self-signed IDCard) entirely in memory, without touching the filesystem.
+    /// Generates a brand-new identity for `project` entirely in memory, without
+    /// touching the filesystem.
+    ///
+    /// Two keys are created: an Ed25519 signing key (the self/primary key) and an
+    /// X25519 encryption key. The IDCard, self-signed by the signing key, lists
+    /// the signing key with purpose `"sign"` and the encryption key with purpose
+    /// `"decrypt"`.
     pub fn generate(project: &str) -> Result<Self> {
-        let key = PrivateKey::Ed25519(Ed25519PrivateKey::generate(&mut OsRng));
-        let idcard = IDCard::new(&key)?;
-        let signed_idcard = idcard.sign(&key)?;
-        let keychain = Keychain::from_keys([key])?;
+        let sign_key = PrivateKey::Ed25519(Ed25519PrivateKey::generate(&mut OsRng));
+        let enc_key = PrivateKey::X25519(X25519PrivateKey::generate(&mut OsRng));
+
+        // IDCard::new lists the signing key as the self key with purpose "sign".
+        let mut idcard = IDCard::new(&sign_key)?;
+        idcard.set_key_purposes(enc_key.public_pkix()?, &["decrypt"]);
+        // Self-sign the (now two-key) card with the signing key.
+        let signed_idcard = idcard.sign(&sign_key)?;
+
+        let keychain = Keychain::from_keys([sign_key, enc_key])?;
         Ok(Identity {
             project: project.to_string(),
             keychain,
@@ -144,11 +158,38 @@ impl Identity {
         &self.project
     }
 
-    /// The primary (and currently only) signing key.
-    pub fn primary_key(&self) -> Result<&PrivateKey> {
+    /// The primary signing key (the IDCard self key, Ed25519).
+    pub fn signing_key(&self) -> Result<&PrivateKey> {
         self.keychain
-            .first_signer()
-            .ok_or_else(|| Error::NotConfigured("keychain has no signing key".into()))
+            .get_key(&self.idcard.self_key)
+            .ok_or_else(|| Error::NotConfigured("signing key missing from keychain".into()))
+    }
+
+    /// The private encryption key (X25519), if one is present in the keychain.
+    pub fn encryption_key(&self) -> Option<&PrivateKey> {
+        let now = now_unix();
+        for sub in &self.idcard.subkeys {
+            if !sub.has_purpose("decrypt") {
+                continue;
+            }
+            if let Some(exp) = sub.expires
+                && exp <= now
+            {
+                continue;
+            }
+            if let Some(key) = self.keychain.get_key(&sub.key) {
+                return Some(key);
+            }
+        }
+        None
+    }
+
+    /// The public encryption key (X25519) others use to encrypt to this identity.
+    pub fn encryption_public(&self) -> Option<PublicKey> {
+        self.idcard
+            .keys_for("decrypt", now_unix())
+            .into_iter()
+            .next()
     }
 
     /// The parsed public IDCard.
@@ -161,7 +202,7 @@ impl Identity {
         &self.signed_idcard
     }
 
-    /// The SHA-256 fingerprint of the primary public key (PKIX/DER) — the 32-byte
+    /// The SHA-256 fingerprint of the signing public key (PKIX/DER) — the 32-byte
     /// value a consumer embeds as its trust anchor.
     pub fn fingerprint(&self) -> [u8; 32] {
         fingerprint_of(&self.idcard.self_key)
@@ -170,7 +211,7 @@ impl Identity {
     /// Signs `payload` as an rsupd content bottle, returning the signed bottle's
     /// CBOR encoding. Used to seal a serialized manifest.
     pub fn sign_payload(&self, payload: Vec<u8>) -> Result<Vec<u8>> {
-        let key = self.primary_key()?;
+        let key = self.signing_key()?;
         let mut bottle =
             bottlers::Bottle::new(payload).with_header("ct", Value::Text(MANIFEST_CT.to_string()));
         bottle.bottle_up()?;
@@ -201,15 +242,32 @@ impl PublicIdentity {
         })
     }
 
-    /// The SHA-256 fingerprint of the primary public key (PKIX/DER).
+    /// The SHA-256 fingerprint of the signing public key (PKIX/DER).
     pub fn fingerprint(&self) -> [u8; 32] {
         fingerprint_of(&self.idcard.self_key)
+    }
+
+    /// The public encryption key (X25519) advertised by this identity, if any.
+    pub fn encryption_public(&self) -> Option<PublicKey> {
+        self.idcard
+            .keys_for("decrypt", now_unix())
+            .into_iter()
+            .next()
     }
 }
 
 /// Computes the rsupd fingerprint of a PKIX/DER public key.
 pub fn fingerprint_of(pkix: &[u8]) -> [u8; 32] {
     purecrypto::hash::sha256(pkix)
+}
+
+/// Current Unix time in seconds (used to filter expired subkeys).
+fn now_unix() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Parses and validates the outer `[version, keychain, idcard]` CBOR envelope,
@@ -266,4 +324,51 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dual_key_identity_roundtrips() {
+        let id = Identity::generate("demo").unwrap();
+
+        // The IDCard advertises both a sign and a decrypt key.
+        let purposes: Vec<String> = id
+            .idcard()
+            .subkeys
+            .iter()
+            .flat_map(|s| s.purposes.clone())
+            .collect();
+        assert!(purposes.iter().any(|p| p == "sign"), "missing sign purpose");
+        assert!(
+            purposes.iter().any(|p| p == "decrypt"),
+            "missing decrypt purpose"
+        );
+
+        // Both private keys are present, and they are distinct keys.
+        assert!(id.signing_key().is_ok());
+        assert!(id.encryption_key().is_some());
+        assert!(id.encryption_public().is_some());
+        let sign_pkix = id.signing_key().unwrap().public_pkix().unwrap();
+        let enc_pkix = id.encryption_key().unwrap().public_pkix().unwrap();
+        assert_ne!(sign_pkix, enc_pkix, "sign and encryption keys must differ");
+        // The fingerprint anchors to the signing key, not the encryption key.
+        assert_eq!(
+            id.fingerprint().to_vec(),
+            fingerprint_of(&sign_pkix).to_vec()
+        );
+
+        // Persisting and reloading preserves both keys.
+        let bytes = id.to_bytes(None).unwrap();
+        let id2 = Identity::from_bytes("demo", &bytes, None).unwrap();
+        assert!(id2.signing_key().is_ok());
+        assert!(id2.encryption_key().is_some());
+        assert_eq!(id2.fingerprint(), id.fingerprint());
+
+        // The public-only view also exposes the encryption key.
+        let pubid = PublicIdentity::from_identity_bytes(&bytes).unwrap();
+        assert!(pubid.encryption_public().is_some());
+    }
 }
