@@ -1,0 +1,30 @@
+[package]
+name = "rsupd"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Signed release distribution and in-place auto-updater built on the BottleFmt stack"
+repository = "https://github.com/KarpelesLab/rsupd"
+license = "MIT"
+keywords = ["update", "autoupdate", "release", "bottle", "signature"]
+categories = ["development-tools", "command-line-utilities"]
+build = "build.rs"
+
+[lib]
+name = "rsupd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rsupd"
+path = "src/bin/rsupd.rs"
+
+[dependencies]
+bottlers = "0.1.1"
+purecrypto = "0.6.20"
+compcol = { version = "0.6.3", default-features = false, features = ["std", "zstd"] }
+ciborium = "0.2"
+
+[dev-dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

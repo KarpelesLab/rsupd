@@ -1,0 +1,46 @@
+//! # rsupd
+//!
+//! `rsupd` distributes application releases as **signed manifests** and updates
+//! running programs in place. It is the Rust successor to
+//! [`goupd`](https://github.com/KarpelesLab/goupd), keeping that project's
+//! atomic binary-swap + restart mechanics but replacing the plaintext update
+//! files with a cryptographically signed, CBOR manifest built on the
+//! [BottleFmt](https://github.com/BottleFmt) stack.
+//!
+//! There are two sides:
+//!
+//! * **Producer** (the [`package`] module and the `rsupd` CLI): given a project's
+//!   compiled binaries, build a [`manifest::Manifest`] listing every target and
+//!   its hashed, zstd-compressed archive, sign it with the project
+//!   [`identity::Identity`], and bundle everything into one store-mode zip ready
+//!   to upload.
+//!
+//! * **Consumer** (the [`update`] module): embed the project's public key
+//!   fingerprint, ask a [`update::Transport`] for the latest manifest, verify the
+//!   signature chain, compare versions, then download / verify / extract / swap
+//!   the running executable.
+//!
+//! The exact upload/download network protocol is intentionally left to the
+//! caller via the [`update::Transport`] trait; an offline
+//! [`update::ZipPackageTransport`] reads packages produced by this same crate so
+//! the whole flow can be exercised without a server.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+pub mod config;
+pub mod error;
+pub mod identity;
+pub mod manifest;
+pub mod package;
+pub mod update;
+
+pub use error::{Error, Result};
+pub use identity::Identity;
+pub use manifest::{Artifact, Hash, Manifest};
+pub use update::{Transport, Updater, ZipPackageTransport};
+
+/// The Rust target triple this build of rsupd is running on, e.g.
+/// `x86_64-unknown-linux-gnu`. Captured at compile time by `build.rs`; it is the
+/// key used to select the matching [`Artifact`] from a [`Manifest`].
+pub const TARGET: &str = env!("RSUPD_TARGET");
