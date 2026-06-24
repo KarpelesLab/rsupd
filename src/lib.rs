@@ -29,6 +29,7 @@
 #![warn(missing_docs)]
 
 pub mod config;
+pub mod doctor;
 pub mod error;
 pub mod identity;
 pub mod manifest;
@@ -36,11 +37,13 @@ pub mod package;
 pub mod target;
 pub mod update;
 
+pub use doctor::DoctorReport;
 pub use error::{Error, Result};
 pub use identity::Identity;
 pub use manifest::{Artifact, Hash, Manifest};
 pub use package::TargetNaming;
 pub use target::{current_label, label_for_triple};
+pub use update::restart::honor_startup_delay;
 pub use update::{Transport, Updater, ZipPackageTransport};
 
 /// The Rust target triple this build of rsupd is running on, e.g.

@@ -9,6 +9,7 @@
 //!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
 //!                  [--no-compress] [-o OUT.zip]
 //! rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
+//! rsupd check      [-C DIR] [--project N]
 //! ```
 
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ fn run(args: &[String]) -> rsupd::Result<()> {
         Some("id") => run_id(&rest),
         Some("build") => run_build(&rest),
         Some("inspect") => run_inspect(&rest),
+        Some("check") => run_check(&rest),
         Some("help") | Some("--help") | Some("-h") | None => {
             print_usage();
             Ok(())
@@ -206,6 +208,22 @@ fn run_inspect(args: &[String]) -> rsupd::Result<()> {
     Ok(())
 }
 
+fn run_check(args: &[String]) -> rsupd::Result<()> {
+    let opts = Flags::parse(args);
+    let project_dir = opts
+        .project_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
+    let report = rsupd::doctor::check(&project_dir, opts.project.as_deref())?;
+    print!("{}", report.render());
+    if report.ok() {
+        Ok(())
+    } else {
+        // Non-zero exit so this is usable as a CI / pre-release gate.
+        Err(err("rsupd is not fully wired in (see guidance above)"))
+    }
+}
+
 /// Opens a signed bottle and returns the raw manifest payload (no verification).
 fn signed_payload(signed: &[u8]) -> rsupd::Result<Vec<u8>> {
     let (payload, _info) = bottlers::Opener::empty().open_cbor(signed)?;
@@ -299,6 +317,7 @@ USAGE:
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
+  rsupd check      [-C DIR] [--project N]
 
 Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/."
     );

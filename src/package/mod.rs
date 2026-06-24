@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::manifest::{Artifact, FORMAT_VERSION, Hash, Manifest};
 
-pub use discover::{DiscoveredProject, discover};
+pub use discover::{BinEntry, DiscoveredProject, bin_entries, discover};
 
 // `TargetNaming` is defined below and re-exported at the crate root.
 

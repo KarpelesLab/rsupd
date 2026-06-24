@@ -42,7 +42,16 @@ rsupd build -C . --channel stable -o myapp.zip
 
 # verify / inspect a package
 rsupd inspect myapp.zip
+
+# self-check: is every [[bin]] wired up with the right fingerprint?
+rsupd check
 ```
+
+`rsupd check` statically scans each binary's entry point (and the rest of `src/`),
+confirms the updater is constructed and the project fingerprint is embedded, and — when
+something is missing — prints copy-paste guidance for both a short-running `--update`
+flag and a daemon's hourly background updater. It exits non-zero when not fully wired, so
+it works as a pre-release / CI gate.
 
 The package is a plain store-mode `.zip` (`unzip`-readable) containing `manifest.cbor`
 plus one zstd-compressed archive per target, named flat (no slashes) as
