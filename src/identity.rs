@@ -84,27 +84,7 @@ impl Identity {
 
     /// Parses an identity from raw `identity.bin` bytes.
     pub fn from_bytes(project: &str, data: &[u8], password: Option<&[u8]>) -> Result<Self> {
-        let value: Value = ciborium::de::from_reader(data)
-            .map_err(|e| Error::Cbor(format!("identity decode: {e}")))?;
-        let arr = match value {
-            Value::Array(a) => a,
-            _ => return Err(Error::Malformed("identity is not a CBOR array".into())),
-        };
-        if arr.len() != 3 {
-            return Err(Error::Malformed(format!(
-                "identity must have 3 fields, got {}",
-                arr.len()
-            )));
-        }
-        let version = arr[0]
-            .as_integer()
-            .and_then(|i| i64::try_from(i).ok())
-            .ok_or_else(|| Error::Malformed("identity version not an integer".into()))?;
-        if version != IDENTITY_FORMAT {
-            return Err(Error::Malformed(format!(
-                "unsupported identity version {version}"
-            )));
-        }
+        let arr = parse_envelope(data)?;
         let keychain_bytes = bytes_field(&arr[1], "keychain")?;
         let signed_idcard = bytes_field(&arr[2], "idcard")?.to_vec();
 
@@ -117,6 +97,20 @@ impl Identity {
             idcard,
             signed_idcard,
         })
+    }
+
+    /// Loads only the public half of `project`'s identity (the IDCard), without
+    /// touching the encrypted keychain — so no password is required.
+    pub fn load_public(project: &str) -> Result<PublicIdentity> {
+        let path = config::identity_path(project)?;
+        if !path.exists() {
+            return Err(Error::NotConfigured(format!(
+                "no identity for project {project:?} (expected {})",
+                path.display()
+            )));
+        }
+        let data = std::fs::read(&path)?;
+        PublicIdentity::from_identity_bytes(&data)
     }
 
     /// Serializes the identity to `identity.bin` bytes.
@@ -185,9 +179,64 @@ impl Identity {
     }
 }
 
+/// The public half of an identity: the IDCard, with no private key material.
+/// Recovered from `identity.bin` without a password.
+pub struct PublicIdentity {
+    /// The parsed public IDCard.
+    pub idcard: IDCard,
+    /// The self-signed IDCard bottle bytes.
+    pub signed_idcard: Vec<u8>,
+}
+
+impl PublicIdentity {
+    /// Parses the public IDCard out of raw `identity.bin` bytes, ignoring (and
+    /// never decrypting) the keychain field.
+    pub fn from_identity_bytes(data: &[u8]) -> Result<Self> {
+        let arr = parse_envelope(data)?;
+        let signed_idcard = bytes_field(&arr[2], "idcard")?.to_vec();
+        let idcard = IDCard::from_signed(&signed_idcard)?;
+        Ok(PublicIdentity {
+            idcard,
+            signed_idcard,
+        })
+    }
+
+    /// The SHA-256 fingerprint of the primary public key (PKIX/DER).
+    pub fn fingerprint(&self) -> [u8; 32] {
+        fingerprint_of(&self.idcard.self_key)
+    }
+}
+
 /// Computes the rsupd fingerprint of a PKIX/DER public key.
 pub fn fingerprint_of(pkix: &[u8]) -> [u8; 32] {
     purecrypto::hash::sha256(pkix)
+}
+
+/// Parses and validates the outer `[version, keychain, idcard]` CBOR envelope,
+/// returning the three array elements. Does not interpret the inner fields.
+fn parse_envelope(data: &[u8]) -> Result<Vec<Value>> {
+    let value: Value = ciborium::de::from_reader(data)
+        .map_err(|e| Error::Cbor(format!("identity decode: {e}")))?;
+    let arr = match value {
+        Value::Array(a) => a,
+        _ => return Err(Error::Malformed("identity is not a CBOR array".into())),
+    };
+    if arr.len() != 3 {
+        return Err(Error::Malformed(format!(
+            "identity must have 3 fields, got {}",
+            arr.len()
+        )));
+    }
+    let version = arr[0]
+        .as_integer()
+        .and_then(|i| i64::try_from(i).ok())
+        .ok_or_else(|| Error::Malformed("identity version not an integer".into()))?;
+    if version != IDENTITY_FORMAT {
+        return Err(Error::Malformed(format!(
+            "unsupported identity version {version}"
+        )));
+    }
+    Ok(arr)
 }
 
 fn bytes_field<'a>(v: &'a Value, what: &str) -> Result<&'a [u8]> {

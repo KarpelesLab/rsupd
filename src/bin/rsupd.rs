@@ -64,9 +64,9 @@ fn run_id(args: &[String]) -> rsupd::Result<()> {
             Ok(())
         }
         Some("show") => {
-            let password = opts.read_password_if_set("Keychain password: ")?;
-            let id = Identity::load(&project, password.as_deref())?;
-            let card = id.idcard();
+            // Public IDCard only — no keychain decryption, so no password needed.
+            let id = Identity::load_public(&project)?;
+            let card = &id.idcard;
             println!("project:     {project}");
             println!("fingerprint: {}", hex(&id.fingerprint()));
             println!("self_key:    {} bytes (PKIX)", card.self_key.len());
@@ -75,8 +75,8 @@ fn run_id(args: &[String]) -> rsupd::Result<()> {
             Ok(())
         }
         Some("export") => {
-            let password = opts.read_password_if_set("Keychain password: ")?;
-            let id = Identity::load(&project, password.as_deref())?;
+            // Public fingerprint only — no password needed.
+            let id = Identity::load_public(&project)?;
             let fp = id.fingerprint();
             match &opts.output {
                 Some(path) => {
