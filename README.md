@@ -45,8 +45,11 @@ rsupd inspect myapp.zip
 ```
 
 The package is a plain store-mode `.zip` (`unzip`-readable) containing `manifest.cbor`
-plus one zstd-compressed archive per target. This is the single file you upload; the
-hosting API is pluggable (see below).
+plus one zstd-compressed archive per target, named flat as `<bin>_<os>_<arch>.zst`
+(e.g. `rsupd_linux_amd64.zst`). Artifacts are identified by their compact `os_arch`
+label (goupd convention); the updater derives the running host's label from its target
+triple to pick the right one. This is the single file you upload; the hosting API is
+pluggable (see below).
 
 ## Consumer (library)
 

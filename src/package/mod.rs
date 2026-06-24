@@ -98,11 +98,26 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
     let mut zw = zip::ZipWriter::new();
     let mut artifacts = Vec::new();
 
-    for target in &targets {
+    // Track which triple produced each `os_arch` label so we can reject two
+    // builds (e.g. linux gnu vs musl) that would collide on the same label.
+    let mut seen_labels: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    for triple in &targets {
+        let label = crate::target::label_for_triple(triple);
         for bin in &bins {
-            let Some(path) = discover::find_binary(&project.root, target, bin) else {
+            let Some(path) = discover::find_binary(&project.root, triple, bin) else {
                 continue;
             };
+            if let Some(prev) = seen_labels.insert(format!("{label}/{bin}"), triple.clone())
+                && &prev != triple
+            {
+                return Err(Error::Other(format!(
+                    "targets {prev:?} and {triple:?} both map to label {label:?} for binary \
+                     {bin:?}; build only one per os_arch or disambiguate the triples"
+                )));
+            }
+
             let raw = std::fs::read(&path)?;
             let hash = Hash::sha256(&raw);
             let raw_size = raw.len() as u64;
@@ -121,10 +136,11 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
                 }
             };
 
-            let filename = format!("bin/{target}/{bin}.{ext}");
+            // Flat, slashless name: <bin>_<os>_<arch>.<ext>, e.g. rsupd_linux_amd64.zst.
+            let filename = format!("{bin}_{label}.{ext}");
             zw.add(&filename, &stored)?;
             artifacts.push(Artifact {
-                target: target.clone(),
+                target: label.clone(),
                 filename,
                 compression: compression.to_string(),
                 raw_size,

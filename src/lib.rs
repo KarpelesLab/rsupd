@@ -33,14 +33,18 @@ pub mod error;
 pub mod identity;
 pub mod manifest;
 pub mod package;
+pub mod target;
 pub mod update;
 
 pub use error::{Error, Result};
 pub use identity::Identity;
 pub use manifest::{Artifact, Hash, Manifest};
+pub use target::{current_label, label_for_triple};
 pub use update::{Transport, Updater, ZipPackageTransport};
 
 /// The Rust target triple this build of rsupd is running on, e.g.
-/// `x86_64-unknown-linux-gnu`. Captured at compile time by `build.rs`; it is the
-/// key used to select the matching [`Artifact`] from a [`Manifest`].
+/// `x86_64-unknown-linux-gnu`. Captured at compile time by `build.rs`. It names
+/// the directory binaries are read from (`target/<triple>/release`); the compact
+/// `os_arch` label that identifies an [`Artifact`] is derived from it by
+/// [`current_label`].
 pub const TARGET: &str = env!("RSUPD_TARGET");

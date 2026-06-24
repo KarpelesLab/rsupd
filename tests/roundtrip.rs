@@ -61,7 +61,7 @@ fn full_roundtrip_install() {
         .expect("verify with correct fingerprint");
     assert_eq!(manifest.project, "demo");
     assert_eq!(manifest.version, "1.0.0");
-    assert!(manifest.artifact_for(rsupd::TARGET).is_some());
+    assert!(manifest.artifact_for(&rsupd::current_label()).is_some());
 
     // A wrong fingerprint must fail.
     let wrong = [0u8; 32];
