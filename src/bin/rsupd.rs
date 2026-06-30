@@ -227,43 +227,77 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
     Ok(())
 }
 
-/// Downloads a GitHub Actions run's artifacts and stages any compiled project
-/// binaries into `target/<triple>/release/`, returning the staged target
-/// triples. Convention: each build job uploads one artifact **named after the
-/// Rust target triple**, containing the compiled binary (`<bin>` or
-/// `<bin>.exe`). Requires the `gh` CLI, authenticated for the repo.
+/// Which CI provider's artifacts to pull from.
+enum CiProvider {
+    GitHub,
+    GitLab,
+}
+
+/// Detects the CI provider for `project_dir`: an explicit `--provider`, else the
+/// CI config file that is present (`.gitlab-ci.yml` / `.github/workflows/`),
+/// else the `origin` remote host.
+fn detect_provider(project_dir: &Path, opts: &Flags) -> rsupd::Result<CiProvider> {
+    if let Some(p) = &opts.provider {
+        return match p.to_ascii_lowercase().as_str() {
+            "github" | "gh" => Ok(CiProvider::GitHub),
+            "gitlab" | "gl" => Ok(CiProvider::GitLab),
+            other => Err(err(format!(
+                "unknown --provider {other:?} (use github or gitlab)"
+            ))),
+        };
+    }
+    if project_dir.join(".gitlab-ci.yml").exists() {
+        return Ok(CiProvider::GitLab);
+    }
+    if project_dir.join(".github").join("workflows").is_dir() {
+        return Ok(CiProvider::GitHub);
+    }
+    if let Ok(url) = run_cmd_in(project_dir, "git", &["remote", "get-url", "origin"]) {
+        if url.contains("gitlab") {
+            return Ok(CiProvider::GitLab);
+        }
+        if url.contains("github") {
+            return Ok(CiProvider::GitHub);
+        }
+    }
+    Err(err(
+        "could not detect a CI provider; pass --provider github|gitlab",
+    ))
+}
+
+/// Downloads a CI run's artifacts and stages any compiled project binaries into
+/// `target/<triple>/release/`, returning the staged target triples.
+///
+/// Convention (both providers): one artifact / job **named after the Rust
+/// target triple**, containing the compiled binary (`<bin>` or `<bin>.exe`).
+/// Requires the provider's CLI (`gh` or `glab`), authenticated for the repo.
 fn stage_ci_binaries(project_dir: &Path, opts: &Flags) -> rsupd::Result<Vec<String>> {
     let bins = package::discover(project_dir)?.bins;
-
-    let repo = match &opts.repo {
-        Some(r) => r.clone(),
-        None => run_cmd(
-            "gh",
-            &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-        )?,
-    };
-    let run_id = match &opts.run_id {
-        Some(r) => r.clone(),
-        None => resolve_ci_run(project_dir, &repo, opts.commit.as_deref())?,
-    };
-
-    println!("ci: downloading artifacts from {repo} run {run_id}");
-    let tmp = std::env::temp_dir().join(format!("rsupd-ci-{}-{run_id}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("rsupd-ci-{}", std::process::id()));
     std::fs::create_dir_all(&tmp)?;
-    let tmp_str = tmp.to_string_lossy().into_owned();
-    run_cmd("gh", &["run", "download", &run_id, "-R", &repo, "-D", &tmp_str])?;
 
-    // Each artifact extracts to <tmp>/<artifact-name>/...; treat the name as a
-    // target triple and stage any project binaries found beneath it.
+    match detect_provider(project_dir, opts)? {
+        CiProvider::GitHub => download_github_artifacts(project_dir, opts, &tmp)?,
+        CiProvider::GitLab => download_gitlab_artifacts(project_dir, opts, &tmp)?,
+    }
+
+    let staged = stage_from_dir(&tmp, &bins, project_dir)?;
+    std::fs::remove_dir_all(&tmp).ok();
+    Ok(staged)
+}
+
+/// Stages binaries from a download tree whose immediate subdirectories are each
+/// named after a target triple. Returns the triples that yielded a binary.
+fn stage_from_dir(tmp: &Path, bins: &[String], project_dir: &Path) -> rsupd::Result<Vec<String>> {
     let mut staged = Vec::new();
-    for entry in std::fs::read_dir(&tmp)? {
+    for entry in std::fs::read_dir(tmp)? {
         let dir = entry?.path();
         if !dir.is_dir() {
             continue;
         }
         let triple = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let mut staged_any = false;
-        for bin in &bins {
+        for bin in bins {
             let names = [bin.clone(), format!("{bin}.exe")];
             if let Some(src) = find_file(&dir, &names) {
                 let destdir = project_dir.join("target").join(&triple).join("release");
@@ -277,22 +311,48 @@ fn stage_ci_binaries(project_dir: &Path, opts: &Flags) -> rsupd::Result<Vec<Stri
             staged.push(triple);
         }
     }
-    std::fs::remove_dir_all(&tmp).ok();
     Ok(staged)
 }
 
-/// Picks the newest successful run for `commit` (default `HEAD`) that actually
-/// has artifacts, so an artifact-less run (e.g. a release-only workflow) is
-/// skipped. Override with `--run`.
-fn resolve_ci_run(project_dir: &Path, repo: &str, commit: Option<&str>) -> rsupd::Result<String> {
-    let sha = match commit {
-        Some(c) => c.to_string(),
-        None => run_cmd(
-            "git",
-            &["-C", &project_dir.to_string_lossy(), "rev-parse", "HEAD"],
+/// GitHub: resolve the repo + run, then `gh run download` all artifacts into
+/// `tmp` (each extracts to `<tmp>/<artifact-name>/`).
+fn download_github_artifacts(project_dir: &Path, opts: &Flags, tmp: &Path) -> rsupd::Result<()> {
+    let repo = match &opts.repo {
+        Some(r) => r.clone(),
+        None => run_cmd_in(
+            project_dir,
+            "gh",
+            &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
         )?,
     };
-    let ids = run_cmd(
+    let run_id = match &opts.run_id {
+        Some(r) => r.clone(),
+        None => resolve_github_run(project_dir, &repo, opts.commit.as_deref())?,
+    };
+    println!("ci: downloading GitHub artifacts from {repo} run {run_id}");
+    let tmp_str = tmp.to_string_lossy().into_owned();
+    run_cmd_in(
+        project_dir,
+        "gh",
+        &["run", "download", &run_id, "-R", &repo, "-D", &tmp_str],
+    )?;
+    Ok(())
+}
+
+/// Picks the newest successful GitHub run for `commit` (default `HEAD`) that
+/// actually has artifacts, so an artifact-less run (e.g. a release-only
+/// workflow) is skipped. Override with `--run`.
+fn resolve_github_run(
+    project_dir: &Path,
+    repo: &str,
+    commit: Option<&str>,
+) -> rsupd::Result<String> {
+    let sha = match commit {
+        Some(c) => c.to_string(),
+        None => run_cmd_in(project_dir, "git", &["rev-parse", "HEAD"])?,
+    };
+    let ids = run_cmd_in(
+        project_dir,
         "gh",
         &[
             "api",
@@ -302,7 +362,8 @@ fn resolve_ci_run(project_dir: &Path, repo: &str, commit: Option<&str>) -> rsupd
         ],
     )?;
     for id in ids.lines().map(str::trim).filter(|s| !s.is_empty()) {
-        let count = run_cmd(
+        let count = run_cmd_in(
+            project_dir,
             "gh",
             &[
                 "api",
@@ -318,6 +379,77 @@ fn resolve_ci_run(project_dir: &Path, repo: &str, commit: Option<&str>) -> rsupd
     Err(err(format!(
         "no successful CI run with artifacts found for commit {sha}; pass --run <id>"
     )))
+}
+
+/// GitLab: find the newest successful pipeline for the ref, then download each
+/// of its artifact-bearing jobs into `<tmp>/<job-name>/` via `glab`. `glab api`
+/// has no jq filter, so responses are parsed here.
+fn download_gitlab_artifacts(project_dir: &Path, opts: &Flags, tmp: &Path) -> rsupd::Result<()> {
+    // `glab job artifact` works on a ref; prefer --commit (a branch or sha),
+    // else the current branch.
+    let ref_name = match &opts.commit {
+        Some(c) => c.clone(),
+        None => run_cmd_in(project_dir, "git", &["rev-parse", "--abbrev-ref", "HEAD"])?,
+    };
+
+    let pipelines = run_cmd_in(
+        project_dir,
+        "glab",
+        &[
+            "api",
+            &format!("projects/:id/pipelines?ref={ref_name}&status=success&per_page=20"),
+        ],
+    )?;
+    let pipelines: serde_json::Value = serde_json::from_str(&pipelines)
+        .map_err(|e| err(format!("parsing GitLab pipelines: {e}")))?;
+    // GitLab returns pipelines newest-first.
+    let pid = pipelines
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|p| p.get("id"))
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| err(format!("no successful GitLab pipeline for ref {ref_name:?}")))?;
+
+    let jobs = run_cmd_in(
+        project_dir,
+        "glab",
+        &["api", &format!("projects/:id/pipelines/{pid}/jobs?per_page=100")],
+    )?;
+    let jobs: serde_json::Value =
+        serde_json::from_str(&jobs).map_err(|e| err(format!("parsing GitLab jobs: {e}")))?;
+    let job_names: Vec<String> = jobs
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|j| j.get("artifacts_file").is_some_and(|v| !v.is_null()))
+                .filter_map(|j| j.get("name").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    println!("ci: downloading GitLab artifacts from pipeline {pid} (ref {ref_name})");
+    let mut any = false;
+    for job in &job_names {
+        let dest = tmp.join(job);
+        std::fs::create_dir_all(&dest)?;
+        let dest_str = dest.to_string_lossy().into_owned();
+        let mut args = vec!["job", "artifact", ref_name.as_str(), job.as_str(), "-p", &dest_str];
+        if let Some(r) = &opts.repo {
+            args.push("-R");
+            args.push(r);
+        }
+        // Best effort: a job whose artifact holds none of our binaries is just
+        // skipped later by stage_from_dir.
+        if run_cmd_in(project_dir, "glab", &args).is_ok() {
+            any = true;
+        }
+    }
+    if !any {
+        return Err(err(format!(
+            "no artifacts could be downloaded from GitLab pipeline {pid}"
+        )));
+    }
+    Ok(())
 }
 
 /// Recursively finds the first file under `root` whose name matches any of
@@ -342,9 +474,11 @@ fn find_file(root: &Path, names: &[String]) -> Option<PathBuf> {
     None
 }
 
-/// Runs `program args...`, returning trimmed stdout, or an error carrying stderr.
-fn run_cmd(program: &str, args: &[&str]) -> rsupd::Result<String> {
+/// Runs `program args...` in `dir`, returning trimmed stdout, or an error
+/// carrying stderr. Running in `dir` lets `gh`/`glab` auto-resolve the repo.
+fn run_cmd_in(dir: &Path, program: &str, args: &[&str]) -> rsupd::Result<String> {
     let out = std::process::Command::new(program)
+        .current_dir(dir)
         .args(args)
         .output()
         .map_err(|e| err(format!("running `{program}`: {e}")))?;
@@ -488,6 +622,7 @@ struct Flags {
     assume_yes: bool,
     verbose: bool,
     ci: bool,
+    provider: Option<String>,
     run_id: Option<String>,
     repo: Option<String>,
     commit: Option<String>,
@@ -518,6 +653,7 @@ impl Flags {
                 "--yes" | "-y" => f.assume_yes = true,
                 "--verbose" | "-v" => f.verbose = true,
                 "--ci" => f.ci = true,
+                "--provider" => f.provider = Some(take()),
                 "--run" => f.run_id = Some(take()),
                 "--repo" => f.repo = Some(take()),
                 "--commit" => f.commit = Some(take()),
@@ -570,7 +706,8 @@ USAGE:
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
   rsupd publish    [<build flags>...] [-y] [-v]
-                   [--ci [--run ID] [--repo OWNER/REPO] [--commit SHA]]
+                   [--ci [--provider github|gitlab] [--run ID]
+                         [--repo OWNER/REPO] [--commit SHA|REF]]
   rsupd version
   rsupd update     [--channel C]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
@@ -579,10 +716,12 @@ USAGE:
 Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/.
 
 `publish` builds (like `build`), confirms, then uploads to Cloud/Rust:upload.
-With `--ci`, binaries are downloaded (via `gh`) from a GitHub Actions run
-instead of the local target/ tree: each build job must upload one artifact
-named after its Rust target triple, containing the compiled binary. By default
-the newest successful run for HEAD that has artifacts is used."
+With `--ci`, binaries are downloaded from a CI run instead of the local target/
+tree: each build job must publish one artifact named after its Rust target
+triple, containing the compiled binary. The provider is auto-detected from the
+CI config file (.github/workflows or .gitlab-ci.yml) and uses `gh` (GitHub) or
+`glab` (GitLab); override with --provider. By default the newest successful run
+for HEAD that has artifacts is used."
     );
 }
 
