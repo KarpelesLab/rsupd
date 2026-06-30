@@ -25,11 +25,10 @@ const WIRE_MARKERS: &[&str] = &[
 /// Whether (and how correctly) the project fingerprint is embedded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FingerprintState {
-    /// The project's fingerprint was found embedded (hex literal or `.fpr` file).
+    /// The project's fingerprint hex was found embedded in the sources.
     Matches,
-    /// A fingerprint/`.fpr` was found but it does not match the project's.
-    Mismatch,
-    /// The updater is wired but no matching fingerprint was located.
+    /// The updater is wired but the project's fingerprint hex was not found in
+    /// the sources (it may be missing, or a wrong/stale value is embedded).
     NotFound,
     /// No identity exists to compare against (run `rsupd id init` first).
     Unknown,
@@ -152,9 +151,11 @@ fn has_wire_markers(text: &str) -> bool {
     WIRE_MARKERS.iter().any(|m| text.contains(m))
 }
 
-/// Determines the crate-wide fingerprint embedding state.
+/// Determines the crate-wide fingerprint embedding state by looking for the
+/// fingerprint hex (as embedded via `.fingerprint_hex("..")`) anywhere in the
+/// sources.
 fn fingerprint_state(
-    project_dir: &Path,
+    _project_dir: &Path,
     fingerprint: Option<&[u8; 32]>,
     corpus: &[(PathBuf, String)],
 ) -> FingerprintState {
@@ -162,29 +163,11 @@ fn fingerprint_state(
         return FingerprintState::Unknown;
     };
     let want_hex = hex(fp);
-
-    // 1. The hex digest appears literally somewhere in the sources.
     if corpus
         .iter()
         .any(|(_, t)| t.to_lowercase().contains(&want_hex))
     {
-        return FingerprintState::Matches;
-    }
-
-    // 2. A `.fpr` file in the project matches (or mismatches) the fingerprint.
-    let mut saw_fpr = false;
-    for fpr in find_fpr_files(project_dir) {
-        if let Ok(bytes) = std::fs::read(&fpr) {
-            saw_fpr = true;
-            if bytes == fp.as_slice() {
-                return FingerprintState::Matches;
-            }
-        }
-    }
-
-    if saw_fpr {
-        // A fingerprint file exists but none matched — likely stale.
-        FingerprintState::Mismatch
+        FingerprintState::Matches
     } else {
         FingerprintState::NotFound
     }
@@ -237,22 +220,6 @@ fn walk_rs_depth(dir: &Path, out: &mut Vec<(PathBuf, String)>, depth: usize) {
     }
 }
 
-/// Finds `.fpr` files in the project root and `src/`.
-fn find_fpr_files(project_dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for dir in [project_dir.to_path_buf(), project_dir.join("src")] {
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.extension().is_some_and(|x| x == "fpr") {
-                    out.push(p);
-                }
-            }
-        }
-    }
-    out
-}
-
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -280,7 +247,6 @@ impl DoctorReport {
             "  fingerprint embedded: {}\n",
             match self.fingerprint {
                 FingerprintState::Matches => "ok",
-                FingerprintState::Mismatch => "MISMATCH (a .fpr file does not match this identity)",
                 FingerprintState::NotFound => "MISSING",
                 FingerprintState::Unknown => "unknown (no identity)",
             }
@@ -357,19 +323,22 @@ fn guidance(report: &DoctorReport) -> String {
         ));
     }
 
+    let fp_hex = report
+        .fingerprint_hex
+        .as_deref()
+        .unwrap_or("<run `rsupd id export`>");
+
     g.push_str(&format!(
-        "1. Export the fingerprint next to your crate (re-run if the identity changes):\n\
-         \x20    rsupd id export --project {p} -o {p}.fpr\n\n"
+        "1. The fingerprint (a hash of the public key — safe to paste into source) is:\n\
+         \x20    {fp_hex}\n\
+         \x20  (re-print any time with `rsupd id export --project {p}`)\n\n"
     ));
 
     g.push_str(&format!(
-        "2. In {entry}, embed the fingerprint and build an updater:\n\n\
-         \x20    // Trust anchor: the 32-byte fingerprint of the project signing key.\n\
-         \x20    const RSUPD_FINGERPRINT: &[u8] =\n\
-         \x20        include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{p}.fpr\"));\n\n\
+        "2. In {entry}, build an updater with that fingerprint:\n\n\
          \x20    fn rsupd_updater() -> rsupd::Result<rsupd::Updater> {{\n\
          \x20        rsupd::Updater::builder(env!(\"CARGO_PKG_NAME\"), env!(\"CARGO_PKG_VERSION\"))\n\
-         \x20            .fingerprint(RSUPD_FINGERPRINT)\n\
+         \x20            .fingerprint_hex(\"{fp_hex}\")\n\
          \x20            // Optional: detect newer builds of the SAME version (needs build.rs).\n\
          \x20            .git_tag(env!(\"RSUPD_GIT_TAG\"))\n\
          \x20            .date_tag(rsupd::date_tag_from_unix(env!(\"RSUPD_BUILD_UNIX\")))\n\
@@ -406,13 +375,6 @@ fn guidance(report: &DoctorReport) -> String {
          \x20        // ... run the daemon ...\n\
          \x20    }\n\n",
     );
-
-    if report.fingerprint == FingerprintState::Mismatch {
-        g.push_str(
-            "NOTE: a .fpr file was found that does not match this identity — re-run step 1\n\
-             to refresh it (the signing key may have been regenerated).\n",
-        );
-    }
 
     g
 }

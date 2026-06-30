@@ -62,7 +62,7 @@ fn detects_updater_wiring() {
     );
 
     // (No config-dir identity here, so the fingerprint state is Unknown; the
-    // hex/.fpr matching paths are covered by the CLI smoke test. This asserts
+    // hex matching path are covered by the CLI smoke test. This asserts
     // the wiring detection itself.)
     let report = doctor::check(&root, None).unwrap();
     assert!(report.bins[0].wired, "Updater::builder should be detected");

@@ -55,10 +55,10 @@ and your **program consumes** them (a few lines of the `rsupd` library). Here is
 ### 1. Create the signing identity and CI — once, publisher side
 
 ```sh
-cargo install rsupd --features _cli            # the producer CLI (the library default is the updater)
-rsupd id init   --project myapp                # creates ~/.config/rsupd/myapp/identity.bin
-rsupd id export --project myapp -o myapp.fpr   # 32-byte trust anchor — commit this file
-rsupd publish --setup-ci --full                # build.rs + multi-platform CI + a sign/publish job
+cargo install rsupd --features _cli   # the producer CLI (the library default is the updater)
+rsupd id init   --project myapp       # creates ~/.config/rsupd/myapp/identity.bin
+rsupd id export --project myapp       # prints the 32-byte trust anchor as hex (paste it into your app)
+rsupd publish --setup-ci --full       # build.rs + multi-platform CI + a sign/publish job
 ```
 
 Guard `identity.bin` — it is the signing key. `--setup-ci --full` also uploads it as the
@@ -73,12 +73,11 @@ cargo add rsupd     # the default is the consumer updater — no features needed
 ```
 
 ```rust
-// Compile the fingerprint in as the trust anchor.
-const FINGERPRINT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/myapp.fpr"));
-
 fn updater() -> rsupd::Result<rsupd::Updater> {
     rsupd::Updater::builder(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
-        .fingerprint(FINGERPRINT)
+        // The trust anchor from `rsupd id export`. It's a hash of a public key,
+        // so it's safe to paste right into your source.
+        .fingerprint_hex("925804220841644e23b6c756b2dc3e611374d08eeb24918fcff0161401da8334")
         .build() // fetches from the dist-go host by default
 }
 ```
@@ -152,10 +151,9 @@ it like any other code-signing key — anyone who has it can publish updates you
 
 ### The fingerprint is the trust anchor
 
-`rsupd id export` writes the 32-byte SHA-256 of the signing public key to a `.fpr` file. You
-`include_bytes!` that into your program. That single constant is the **entire** basis of trust:
-no key servers, no certificate chains, no TLS pinning. It is public (it's a hash of a public
-key), so commit it freely.
+`rsupd id export` prints the 32-byte SHA-256 of the signing public key as hex, which you paste
+into your program via `.fingerprint_hex("..")`. That single constant is the **entire** basis of trust: no key servers, no
+certificate chains, no TLS pinning. It is public (a hash of a public key), so commit it freely.
 
 ### The manifest is a signed document
 
@@ -241,7 +239,7 @@ your app needs no feature — it's the consumer updater by default.
 ```sh
 # 1. one-time: create the project signing identity, and export its fingerprint
 rsupd id init   --project myapp
-rsupd id export --project myapp -o myapp.fpr   # commit this; embed it in the app
+rsupd id export --project myapp                # prints the fingerprint hex to embed in the app
 
 # 2. compile your binaries (natively and/or cross-compiled)
 cargo build --release                          # plus any `--target <triple>` builds
@@ -293,8 +291,9 @@ released artifact set can't be silently overwritten.
 
 The minimal integration is in [Getting started](#getting-started) above. A few details:
 
-- **Builder knobs** (`rsupd::Updater::builder(name, version)`): `.fingerprint(..)` (required, the
-  trust anchor); `.channel(..)` (defaults to `master`, must match how you publish);
+- **Builder knobs** (`rsupd::Updater::builder(name, version)`): `.fingerprint_hex("..")` (or
+  `.fingerprint(bytes)` for raw bytes) — required, the trust anchor; `.channel(..)` (defaults to
+  `master`, must match how you publish);
   `.git_tag(..)`/`.date_tag(..)` (optional build identity for same-version detection);
   `.transport(..)` (optional, defaults to the dist-go `HttpTransport`); `.auto_restart(bool)`
   (default `true`).

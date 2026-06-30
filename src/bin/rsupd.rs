@@ -4,7 +4,7 @@
 //! ```text
 //! rsupd id init    [--project N] [--password]
 //! rsupd id show    [--project N]
-//! rsupd id export  [--project N] [-o FILE]
+//! rsupd id export  [--project N]            (prints the fingerprint hex)
 //! rsupd build      [--project-dir DIR] [--channel C] [--target T]... [--bin B]...
 //!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
 //! rsupd publish    [<build flags>...] [-y] [--ci [--run ID] [--repo R] [--commit SHA]]
@@ -21,9 +21,9 @@ use rsupd::identity::Identity;
 use rsupd::manifest::Manifest;
 use rsupd::package::{self, BuildOptions};
 
-/// rsupd's own project fingerprint (trust anchor), embedded so `rsupd update`
-/// can self-update. Produced by `rsupd id export --project rsupd`.
-const FINGERPRINT: &[u8] = include_bytes!("../../rsupd.fpr");
+/// rsupd's own project fingerprint (trust anchor), so `rsupd update` can
+/// self-update. The hex printed by `rsupd id export --project rsupd`.
+const FINGERPRINT_HEX: &str = "925804220841644e23b6c756b2dc3e611374d08eeb24918fcff0161401da8334";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -99,15 +99,16 @@ fn run_id(args: &[String]) -> rsupd::Result<()> {
             Ok(())
         }
         Some("export") => {
-            // Public fingerprint only — no password needed.
+            // Public fingerprint only — no password needed. Printed as hex to
+            // paste into a consumer via `.fingerprint_hex("..")`.
             let id = Identity::load_public(&project)?;
-            let fp = id.fingerprint();
+            let fp_hex = hex(&id.fingerprint());
             match &opts.output {
                 Some(path) => {
-                    std::fs::write(path, fp)?;
-                    println!("wrote {}-byte fingerprint to {}", fp.len(), path.display());
+                    std::fs::write(path, &fp_hex)?;
+                    println!("wrote fingerprint hex to {}", path.display());
                 }
-                None => println!("{}", hex(&fp)),
+                None => println!("{fp_hex}"),
             }
             Ok(())
         }
@@ -1134,9 +1135,8 @@ fn run_update(args: &[String]) -> rsupd::Result<()> {
     let opts = Flags::parse(args);
     let channel = opts.channel.clone().unwrap_or_default();
 
-    let transport = rsupd::HttpTransport::new(FINGERPRINT);
     let updater = rsupd::Updater::builder("rsupd", env!("CARGO_PKG_VERSION"))
-        .fingerprint(FINGERPRINT)
+        .fingerprint_hex(FINGERPRINT_HEX)
         .channel(channel)
         // Feed in this build's identity so a same-version release only updates
         // when it is a strictly newer build (by git date); an identical build
@@ -1145,7 +1145,7 @@ fn run_update(args: &[String]) -> rsupd::Result<()> {
         .git_tag(rsupd::BUILD_GIT_TAG)
         // A CLI just swaps its binary in place; the next invocation is the new one.
         .auto_restart(false)
-        .transport(Box::new(transport))
+        // Transport defaults to the dist-go HttpTransport from the fingerprint.
         .build()?;
 
     match updater.check()? {
@@ -1334,7 +1334,7 @@ fn print_usage() {
 USAGE:
   rsupd id init    [--project N] [--password]
   rsupd id show    [--project N] [--password]
-  rsupd id export  [--project N] [--password] [-o FILE]
+  rsupd id export  [--project N]              (prints the fingerprint hex)
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
   rsupd publish    [<build flags>...] [-y] [-v]

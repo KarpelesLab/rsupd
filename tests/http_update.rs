@@ -2,21 +2,19 @@
 //! `dist-go` distribution host. Ignored by default since it needs the network;
 //! run with `cargo test --test http_update -- --ignored`.
 
-use rsupd::{HttpTransport, Updater};
+use rsupd::Updater;
 
-/// rsupd's own published fingerprint (same anchor the CLI embeds).
-const FINGERPRINT: &[u8] = include_bytes!("../rsupd.fpr");
+/// rsupd's own published fingerprint hex (same anchor the CLI embeds).
+const FINGERPRINT_HEX: &str = "925804220841644e23b6c756b2dc3e611374d08eeb24918fcff0161401da8334";
 
 #[test]
 #[ignore = "hits the live dist-go.tristandev.net host"]
 fn downloads_verifies_and_installs_latest() {
-    let transport = HttpTransport::new(FINGERPRINT);
-
     // Claim an ancient current version so the published release is always newer.
+    // No transport set: exercises the default dist-go HttpTransport.
     let updater = Updater::builder("rsupd", "0.0.0")
-        .fingerprint(FINGERPRINT)
+        .fingerprint_hex(FINGERPRINT_HEX)
         .auto_restart(false)
-        .transport(Box::new(transport))
         .build()
         .unwrap();
 

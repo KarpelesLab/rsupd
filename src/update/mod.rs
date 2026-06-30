@@ -63,6 +63,7 @@ impl Updater {
             cur_date_tag: String::new(),
             cur_git_tag: String::new(),
             fingerprint: None,
+            fingerprint_err: None,
             transport: None,
             auto_restart: true,
         }
@@ -208,6 +209,7 @@ pub struct UpdaterBuilder {
     cur_date_tag: String,
     cur_git_tag: String,
     fingerprint: Option<Vec<u8>>,
+    fingerprint_err: Option<String>,
     transport: Option<Box<dyn Transport>>,
     auto_restart: bool,
 }
@@ -233,9 +235,24 @@ impl UpdaterBuilder {
         self
     }
 
-    /// Sets the 32-byte expected project fingerprint (the trust anchor). Required.
+    /// Sets the 32-byte expected project fingerprint (the trust anchor) from raw
+    /// bytes. Most callers want [`fingerprint_hex`](Self::fingerprint_hex)
+    /// instead; this is for when you already hold the bytes. Required (or use
+    /// `fingerprint_hex`).
     pub fn fingerprint(mut self, fingerprint: impl Into<Vec<u8>>) -> Self {
         self.fingerprint = Some(fingerprint.into());
+        self
+    }
+
+    /// Sets the trust anchor from its hex form, as printed by `rsupd id export`
+    /// (e.g. `.fingerprint_hex("9258…8334")`). The fingerprint is a hash of a
+    /// public key, so it is fine to paste straight into source. The hex is
+    /// decoded and length-checked when you call [`build`](Self::build).
+    pub fn fingerprint_hex(mut self, hex: &str) -> Self {
+        match decode_hex(hex) {
+            Some(bytes) => self.fingerprint = Some(bytes),
+            None => self.fingerprint_err = Some(format!("invalid fingerprint hex: {hex:?}")),
+        }
         self
     }
 
@@ -257,6 +274,9 @@ impl UpdaterBuilder {
 
     /// Finalizes the updater, validating required fields.
     pub fn build(self) -> Result<Updater> {
+        if let Some(e) = self.fingerprint_err {
+            return Err(Error::Other(e));
+        }
         let fingerprint = self
             .fingerprint
             .ok_or_else(|| Error::NotConfigured("updater fingerprint not set".into()))?;
@@ -293,6 +313,19 @@ impl UpdaterBuilder {
 
 fn log_warn(msg: &str) {
     eprintln!("{msg}");
+}
+
+/// Decodes an even-length hex string to bytes, or `None` on a bad length or a
+/// non-hex character. Surrounding whitespace is trimmed.
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.is_empty() || !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
 }
 
 /// Compares two semver-ish version strings: numeric dot-separated core, with a
