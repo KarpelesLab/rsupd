@@ -16,13 +16,23 @@ atomic binary-swap-and-restart mechanics but replaces goupd's plaintext update f
 
 There are two sides and one rule.
 
-```
-  PRODUCER (the `rsupd` CLI)                CONSUMER (the `rsupd::Updater` library)
-  ───────────────────────────              ──────────────────────────────────────
-  has the private signing key              embeds only the 32-byte public fingerprint
-  builds + signs a release  ──────────────▶  fetches it, verifies the signature against
-  uploads it to rsupd                        the embedded fingerprint, checks the binary
-                                             hash, then atomically swaps itself
+```mermaid
+flowchart LR
+    subgraph P["Producer · rsupd CLI"]
+        direction TB
+        K["holds the private<br/>signing key 🔑"] --> B["build + sign<br/>the release"]
+    end
+    subgraph H["rsupd host (free)"]
+        M["signed manifest<br/>+ artifacts<br/><i>bytes only — no keys</i>"]
+    end
+    subgraph C["Consumer · rsupd::Updater"]
+        direction TB
+        F["embeds the 32-byte<br/>public fingerprint"] --> V["verify signature<br/>against fingerprint"]
+        V --> D["download +<br/>check binary hash"]
+        D --> S["atomic self-swap"]
+    end
+    B -- upload --> M
+    M -- fetch --> V
 ```
 
 rsupd (the hosting service) is free for anyone to publish to. It only stores bytes — it
