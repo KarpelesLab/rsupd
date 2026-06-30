@@ -13,14 +13,16 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
-/// Renders a klbfw error with the platform's request id / token attached when
-/// present, so a server-side failure can be traced in the platform logs.
+/// Renders a klbfw error with the platform's request id attached when present,
+/// so a server-side failure can be traced in the platform logs. The response
+/// token is intentionally omitted — it is a sensitive value and `run_publish`
+/// prints this string to stderr (captured in CI logs).
 fn rest_detail(e: &RestError) -> String {
     if let RestError::Api {
         message,
         code,
         request_id,
-        response,
+        response: _,
     } = e
     {
         let mut s = message.clone();
@@ -29,9 +31,6 @@ fn rest_detail(e: &RestError) -> String {
         }
         if let Some(rid) = request_id {
             s.push_str(&format!(" [X-Request-Id: {rid}]"));
-        }
-        if let Some(tok) = &response.token {
-            s.push_str(&format!(" [token: {tok}]"));
         }
         s
     } else {
@@ -63,7 +62,12 @@ pub fn upload_package(filename: &str, bytes: Vec<u8>, verbose: bool) -> Result<V
         "application/zip",
         None,
     )
-    .map_err(|e| Error::Other(format!("upload to {UPLOAD_ENDPOINT} failed: {}", rest_detail(&e))))?;
+    .map_err(|e| {
+        Error::Other(format!(
+            "upload to {UPLOAD_ENDPOINT} failed: {}",
+            rest_detail(&e)
+        ))
+    })?;
 
     response
         .apply::<Value>()

@@ -33,8 +33,18 @@ fn main() {
     // Re-stamp when the checked-out commit moves.
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(head) = std::fs::read_to_string(".git/HEAD")
-        && let Some(reference) = head.strip_prefix("ref:").map(str::trim)
+        && let Some(reference) = head.strip_prefix("ref:")
     {
-        println!("cargo:rerun-if-changed=.git/{reference}");
+        // Only the first line, and only if it looks like a real git ref path
+        // (no whitespace or control chars) — otherwise an embedded newline could
+        // inject extra `cargo:` directives.
+        let reference = reference.lines().next().unwrap_or("").trim();
+        if !reference.is_empty()
+            && !reference
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            println!("cargo:rerun-if-changed=.git/{reference}");
+        }
     }
 }

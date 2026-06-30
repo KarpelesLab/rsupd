@@ -197,18 +197,42 @@ fn read_src_corpus(project_dir: &Path) -> Vec<(PathBuf, String)> {
     out
 }
 
+/// Largest source file we will read into the corpus; anything bigger is skipped
+/// so a hostile/huge file can't blow up memory.
+const MAX_RS_BYTES: u64 = 4 * 1024 * 1024;
+/// Recursion bound for the source walk (belt-and-suspenders).
+const MAX_WALK_DEPTH: usize = 64;
+
 fn walk_rs(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
+    walk_rs_depth(dir, out, 0);
+}
+
+fn walk_rs_depth(dir: &Path, out: &mut Vec<(PathBuf, String)>, depth: usize) {
+    if depth > MAX_WALK_DEPTH {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for e in entries.flatten() {
+        // Use the entry's own file type (no symlink traversal): a symlink could
+        // form a cycle or point outside the tree, so skip symlinks entirely.
+        let Ok(ft) = e.file_type() else {
+            continue;
+        };
+        if ft.is_symlink() {
+            continue;
+        }
         let p = e.path();
-        if p.is_dir() {
-            walk_rs(&p, out);
-        } else if p.extension().is_some_and(|x| x == "rs")
-            && let Ok(text) = std::fs::read_to_string(&p)
-        {
-            out.push((p, text));
+        if ft.is_dir() {
+            walk_rs_depth(&p, out, depth + 1);
+        } else if ft.is_file() && p.extension().is_some_and(|x| x == "rs") {
+            if e.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > MAX_RS_BYTES {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                out.push((p, text));
+            }
         }
     }
 }
@@ -293,9 +317,9 @@ impl DoctorReport {
         ));
         match &self.ci_config {
             Some(path) => s.push_str(&format!("  [ok ] CI build config            {path}\n")),
-            None => s.push_str(
-                "  [MISSING] CI build config        → run `rsupd publish --setup-ci`\n",
-            ),
+            None => {
+                s.push_str("  [MISSING] CI build config        → run `rsupd publish --setup-ci`\n")
+            }
         }
 
         if self.ok() {

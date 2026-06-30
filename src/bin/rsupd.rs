@@ -184,6 +184,9 @@ fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBu
 
 fn run_publish(args: &[String]) -> rsupd::Result<()> {
     let mut opts = Flags::parse(args);
+    // Operator-supplied identifiers flow into `gh`/`glab` argv and API query
+    // strings; reject anything outside a strict allowlist before use.
+    validate_operator_args(&opts)?;
 
     // --setup-ci: scaffold the CI build config and exit, without publishing.
     if opts.setup_ci {
@@ -233,7 +236,10 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
 
     let result = rsupd::publish::upload_package(&filename, built.bytes, opts.verbose)?;
     println!("upload complete:");
-    println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).unwrap_or_default()
+    );
     Ok(())
 }
 
@@ -303,7 +309,12 @@ fn upload_identity_secret(
 
     match provider {
         CiProvider::GitHub => {
-            run_cmd_stdin(project_dir, "gh", &["secret", "set", "RSUPD_IDENTITY"], b64.as_bytes())?;
+            run_cmd_stdin(
+                project_dir,
+                "gh",
+                &["secret", "set", "RSUPD_IDENTITY"],
+                b64.as_bytes(),
+            )?;
         }
         CiProvider::GitLab => {
             run_cmd_stdin(
@@ -346,6 +357,7 @@ fn setup_build_rs(project_dir: &Path) -> rsupd::Result<()> {
 /// Writes `.github/workflows/build.yml` (a dedicated file we own). When `full`,
 /// appends a tag-gated `publish` job that signs and uploads the release.
 fn setup_github_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Result<()> {
+    validate_bin_names(bins)?;
     let mut paths = String::new();
     for b in bins {
         for ext in ["", ".exe"] {
@@ -371,6 +383,7 @@ fn setup_github_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Re
 /// Creates or edits `.gitlab-ci.yml`, managing only an rsupd-marked block so an
 /// existing pipeline is preserved.
 fn setup_gitlab_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Result<()> {
+    validate_bin_names(bins)?;
     let mut unix = String::new();
     let mut win = String::new();
     for b in bins {
@@ -404,11 +417,20 @@ fn setup_gitlab_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Re
     let updated = match (content.find(begin), content.find(end)) {
         (Some(s), Some(e)) if e > s => {
             // Replace the existing managed block in place.
-            format!("{}{}{}", &content[..s], block.trim_end(), &content[e + end.len()..])
+            format!(
+                "{}{}{}",
+                &content[..s],
+                block.trim_end(),
+                &content[e + end.len()..]
+            )
         }
         _ => {
             // Append a fresh managed block, preserving the rest of the file.
-            let sep = if content.ends_with('\n') { "\n" } else { "\n\n" };
+            let sep = if content.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
             format!("{content}{sep}{block}")
         }
     };
@@ -477,8 +499,15 @@ fn detect_provider(project_dir: &Path, opts: &Flags) -> rsupd::Result<CiProvider
 /// Requires the provider's CLI (`gh` or `glab`), authenticated for the repo.
 fn stage_ci_binaries(project_dir: &Path, opts: &Flags) -> rsupd::Result<Vec<String>> {
     let bins = package::discover(project_dir)?.bins;
-    let tmp = std::env::temp_dir().join(format!("rsupd-ci-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp)?;
+    // Unique, unpredictable, and freshly created: a high-resolution nonce plus
+    // the pid in the name, and `create_dir` (not `create_dir_all`) so a
+    // pre-existing dir is never silently reused.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("rsupd-ci-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&tmp)?;
 
     match detect_provider(project_dir, opts)? {
         CiProvider::GitHub => download_github_artifacts(project_dir, opts, &tmp)?,
@@ -499,7 +528,11 @@ fn stage_from_dir(tmp: &Path, bins: &[String], project_dir: &Path) -> rsupd::Res
         if !dir.is_dir() {
             continue;
         }
-        let triple = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let triple = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let mut staged_any = false;
         for bin in bins {
             let names = [bin.clone(), format!("{bin}.exe")];
@@ -526,7 +559,14 @@ fn download_github_artifacts(project_dir: &Path, opts: &Flags, tmp: &Path) -> rs
         None => run_cmd_in(
             project_dir,
             "gh",
-            &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            &[
+                "repo",
+                "view",
+                "--json",
+                "nameWithOwner",
+                "-q",
+                ".nameWithOwner",
+            ],
         )?,
     };
     let run_id = match &opts.run_id {
@@ -612,12 +652,19 @@ fn download_gitlab_artifacts(project_dir: &Path, opts: &Flags, tmp: &Path) -> rs
         .and_then(|a| a.first())
         .and_then(|p| p.get("id"))
         .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| err(format!("no successful GitLab pipeline for ref {ref_name:?}")))?;
+        .ok_or_else(|| {
+            err(format!(
+                "no successful GitLab pipeline for ref {ref_name:?}"
+            ))
+        })?;
 
     let jobs = run_cmd_in(
         project_dir,
         "glab",
-        &["api", &format!("projects/:id/pipelines/{pid}/jobs?per_page=100")],
+        &[
+            "api",
+            &format!("projects/:id/pipelines/{pid}/jobs?per_page=100"),
+        ],
     )?;
     let jobs: serde_json::Value =
         serde_json::from_str(&jobs).map_err(|e| err(format!("parsing GitLab jobs: {e}")))?;
@@ -634,10 +681,24 @@ fn download_gitlab_artifacts(project_dir: &Path, opts: &Flags, tmp: &Path) -> rs
     println!("ci: downloading GitLab artifacts from pipeline {pid} (ref {ref_name})");
     let mut any = false;
     for job in &job_names {
+        // Job names come from the GitLab API (semi-trusted). A name like
+        // `--foo` would be read as a flag by `glab`, and path separators would
+        // escape the per-job dir, so validate before using it for either.
+        if !is_safe_name(job) {
+            eprintln!("ci: skipping GitLab job with unsafe name {job:?}");
+            continue;
+        }
         let dest = tmp.join(job);
         std::fs::create_dir_all(&dest)?;
         let dest_str = dest.to_string_lossy().into_owned();
-        let mut args = vec!["job", "artifact", ref_name.as_str(), job.as_str(), "-p", &dest_str];
+        let mut args = vec![
+            "job",
+            "artifact",
+            ref_name.as_str(),
+            job.as_str(),
+            "-p",
+            &dest_str,
+        ];
         if let Some(r) = &opts.repo {
             args.push("-R");
             args.push(r);
@@ -686,9 +747,17 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=.git/HEAD");
     if let Ok(head) = std::fs::read_to_string(".git/HEAD")
-        && let Some(reference) = head.strip_prefix("ref:").map(str::trim)
+        && let Some(reference) = head.strip_prefix("ref:")
     {
-        println!("cargo:rerun-if-changed=.git/{reference}");
+        // Only the first line, and only if it looks like a real git ref path
+        // (no whitespace or control chars) — otherwise an embedded newline
+        // could inject extra `cargo:` directives.
+        let reference = reference.lines().next().unwrap_or("").trim();
+        if !reference.is_empty()
+            && !reference.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            println!("cargo:rerun-if-changed=.git/{reference}");
+        }
     }
 }
 "#;
@@ -942,16 +1011,31 @@ __WIN_PATHS__
 /// Recursively finds the first file under `root` whose name matches any of
 /// `names`.
 fn find_file(root: &Path, names: &[String]) -> Option<PathBuf> {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    // Recursion bound over semi-trusted CI artifacts (belt-and-suspenders).
+    const MAX_DEPTH: usize = 64;
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > MAX_DEPTH {
+            continue;
+        }
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in rd.flatten() {
+            // Use the entry's own file type (no symlink traversal): a symlink
+            // could form a cycle or point at attacker-chosen out-of-tree
+            // content, so skip symlinks entirely.
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue;
+            }
             let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if let Some(name) = path.file_name().and_then(|s| s.to_str())
+            if ft.is_dir() {
+                stack.push((path, depth + 1));
+            } else if ft.is_file()
+                && let Some(name) = path.file_name().and_then(|s| s.to_str())
                 && names.iter().any(|n| n == name)
             {
                 return Some(path);
@@ -1060,7 +1144,10 @@ fn run_update(args: &[String]) -> rsupd::Result<()> {
         }
         Some(available) => {
             let version = available.version().to_string();
-            println!("updating rsupd {} -> {version} ...", env!("CARGO_PKG_VERSION"));
+            println!(
+                "updating rsupd {} -> {version} ...",
+                env!("CARGO_PKG_VERSION")
+            );
             let installed = updater.install(&available)?;
             println!("installed v{version} to {}", installed.display());
             Ok(())
@@ -1285,4 +1372,65 @@ fn unhex(s: &str) -> rsupd::Result<Vec<u8>> {
 
 fn err(msg: impl Into<String>) -> rsupd::Error {
     rsupd::Error::Other(msg.into())
+}
+
+/// True for a token safe to use as both a path component and a bare argv token:
+/// non-empty, no leading `-` (so it can't be read as a flag), and only ASCII
+/// alphanumerics plus `._-` (which also blocks `/`, `\`, and `..`).
+fn is_safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Validates `[[bin]]` names before they are spliced into generated CI YAML
+/// (paths and the macOS `lipo` loop). A name with newlines or YAML
+/// metacharacters could otherwise inject arbitrary YAML.
+fn validate_bin_names(bins: &[String]) -> rsupd::Result<()> {
+    for b in bins {
+        if !is_safe_name(b) {
+            return Err(err(format!(
+                "invalid [[bin]] name {b:?}: only ASCII letters, digits, '.', '_', '-' allowed"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validates operator-supplied `--run` / `--repo` / `--commit` before they are
+/// used as `gh`/`glab` argv tokens or interpolated into API query strings.
+fn validate_operator_args(opts: &Flags) -> rsupd::Result<()> {
+    if let Some(run) = &opts.run_id
+        && (run.is_empty() || !run.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(err(format!("invalid --run {run:?}: must be all digits")));
+    }
+    if let Some(repo) = &opts.repo {
+        let valid = !repo.is_empty()
+            && !repo.starts_with('-')
+            && repo.matches('/').count() == 1
+            && repo
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'));
+        if !valid {
+            return Err(err(format!(
+                "invalid --repo {repo:?}: expected owner/repo (ASCII letters, digits, '.', '_', '-')"
+            )));
+        }
+    }
+    if let Some(commit) = &opts.commit {
+        let valid = !commit.is_empty()
+            && !commit.starts_with('-')
+            && commit
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'));
+        if !valid {
+            return Err(err(format!(
+                "invalid --commit {commit:?}: only ASCII letters, digits, '.', '_', '-', '/' allowed"
+            )));
+        }
+    }
+    Ok(())
 }
