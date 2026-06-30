@@ -47,6 +47,97 @@ signing key can publish; nobody else can, no matter what they control.
 
 ---
 
+## Getting started
+
+There are two roles: you **publish** signed releases (a one-time setup with the `rsupd` CLI),
+and your **program consumes** them (a few lines of the `rsupd` library). Here is the whole path.
+
+### 1. Create the signing identity and CI — once, publisher side
+
+```sh
+cargo install rsupd --features _cli            # the producer CLI (the library default is the updater)
+rsupd id init   --project myapp                # creates ~/.config/rsupd/myapp/identity.bin
+rsupd id export --project myapp -o myapp.fpr   # 32-byte trust anchor — commit this file
+rsupd publish --setup-ci --full                # build.rs + multi-platform CI + a sign/publish job
+```
+
+Guard `identity.bin` — it is the signing key. `--setup-ci --full` also uploads it as the
+`RSUPD_IDENTITY` CI secret and adds a tag-gated job that builds every platform and publishes
+signed binaries, so cutting a release becomes "push a `v*` tag". (Use plain `--setup-ci` to scaffold
+the build without the secret upload / auto-publish.)
+
+### 2. Add the updater to your program
+
+```sh
+cargo add rsupd     # the default is the consumer updater — no features needed
+```
+
+```rust
+// Compile the fingerprint in as the trust anchor.
+const FINGERPRINT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/myapp.fpr"));
+
+fn updater() -> rsupd::Result<rsupd::Updater> {
+    rsupd::Updater::builder(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+        .fingerprint(FINGERPRINT)
+        .build() // fetches from the dist-go host by default
+}
+```
+
+That is the whole integration — the channel defaults to `master` (matching `rsupd publish`), and the
+transport defaults to the dist-go `HttpTransport`. *Optional:* to also detect a **rebuild of the same
+version**, add a `build.rs` (`rsupd publish --setup-ci` writes one) and feed its stamps in:
+
+```rust
+        .git_tag(env!("RSUPD_GIT_TAG"))
+        .date_tag(rsupd::date_tag_from_unix(env!("RSUPD_BUILD_UNIX")))
+```
+
+### 3. Trigger updates — pick the mode that fits
+
+**Command-line tool** — update when asked, then exit:
+
+```rust
+fn main() {
+    rsupd::honor_startup_delay(); // settle briefly if an update just restarted us
+    if std::env::args().any(|a| a == "--update") {
+        match updater().and_then(|u| u.update()) {
+            Ok(true)  => println!("updated"),
+            Ok(false) => println!("already up to date"),
+            Err(e)    => eprintln!("update failed: {e}"),
+        }
+        return;
+    }
+    // ... your normal command ...
+}
+```
+
+**Daemon / long-running** — check hourly in the background and restart into the new build:
+
+```rust
+fn main() {
+    rsupd::honor_startup_delay();
+    if let Ok(u) = updater() {
+        u.spawn_auto_update(/* check immediately = */ false); // hourly; installs + restarts
+    }
+    // ... run your service ...
+}
+```
+
+A successful update **restarts** the process into the new binary by default; pass
+`.auto_restart(false)` to the builder if you'd rather apply the swap and handle the restart yourself.
+
+### 4. Verify, then ship
+
+```sh
+rsupd check                          # confirms the fingerprint is embedded and the updater is wired
+git tag v1.2.3 && git push --tags    # CI builds every platform, signs, and publishes
+```
+
+`rsupd check` exits non-zero when something is missing (so it works as a CI gate) and prints
+copy-paste fixes for whatever it finds.
+
+---
+
 ## Security model
 
 This is the part worth understanding in full.
@@ -198,48 +289,24 @@ released artifact set can't be silently overwritten.
 
 ---
 
-## Consumer — wiring the updater into your program
+## Consumer reference
 
-```rust
-// The 32-byte fingerprint produced by `rsupd id export`, compiled in as the trust anchor.
-const FINGERPRINT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/myapp.fpr"));
+The minimal integration is in [Getting started](#getting-started) above. A few details:
 
-fn updater() -> rsupd::Result<rsupd::Updater> {
-    rsupd::Updater::builder(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
-        .fingerprint(FINGERPRINT)
-        .channel("stable")
-        // Build identity (from build.rs) so a same-version rebuild is seen as newer.
-        .git_tag(env!("RSUPD_GIT_TAG"))
-        .date_tag(rsupd::date_tag_from_unix(env!("RSUPD_BUILD_UNIX")))
-        // Fetches from the fixed dist-go host using the embedded fingerprint.
-        .transport(Box::new(rsupd::HttpTransport::new(FINGERPRINT)))
-        .build()
-}
-
-fn main() {
-    rsupd::honor_startup_delay(); // settle briefly after a self-restart
-
-    // short-running command: a `--update` flag that self-updates and exits
-    if std::env::args().any(|a| a == "--update") {
-        match updater().and_then(|u| u.update()) {
-            Ok(true)  => println!("updated"),
-            Ok(false) => println!("already up to date"),
-            Err(e)    => eprintln!("update failed: {e}"),
-        }
-        return;
-    }
-
-    // …or a daemon: check hourly in the background and restart into the new build
-    if let Ok(u) = updater() {
-        u.spawn_auto_update(/* immediate = */ false);
-    }
-    // ... run your program ...
-}
-```
-
-`rsupd::TARGET` is the running build's exact target triple (captured by `build.rs`); the updater
-uses it (or the compact `os_arch` label) to select the matching artifact, and falls back to the
-`darwin_universal` label on macOS.
+- **Builder knobs** (`rsupd::Updater::builder(name, version)`): `.fingerprint(..)` (required, the
+  trust anchor); `.channel(..)` (defaults to `master`, must match how you publish);
+  `.git_tag(..)`/`.date_tag(..)` (optional build identity for same-version detection);
+  `.transport(..)` (optional, defaults to the dist-go `HttpTransport`); `.auto_restart(bool)`
+  (default `true`).
+- **Applying updates:** `check()` returns an `Available` (`.version()`, `.git_tag()`) without
+  touching disk; `install(&available)` swaps the binary in place; `update()` does check + install
+  (+ restart unless disabled); `spawn_auto_update(immediate)` runs that on an hourly background
+  thread.
+- **Target selection:** `rsupd::TARGET` is the running build's exact triple (captured by
+  `build.rs`); the updater matches the artifact by it (or the compact `os_arch` label), falling
+  back to `darwin_universal` on macOS.
+- Call `rsupd::honor_startup_delay()` early in `main()` so a process that was just restarted by an
+  update settles briefly before doing work.
 
 ### Transports
 

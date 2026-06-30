@@ -239,7 +239,10 @@ impl UpdaterBuilder {
         self
     }
 
-    /// Sets the transport. Required.
+    /// Sets the transport. Optional: when left unset, the updater fetches from
+    /// the default [`HttpTransport`] built from the fingerprint (the usual case).
+    /// Set it explicitly only for a custom source, e.g. a [`ZipPackageTransport`]
+    /// for offline/sideloaded updates or tests.
     pub fn transport(mut self, transport: Box<dyn Transport>) -> Self {
         self.transport = Some(transport);
         self
@@ -263,9 +266,11 @@ impl UpdaterBuilder {
                 fingerprint.len()
             )));
         }
+        // Default to the standard dist-go HttpTransport, derived from the
+        // fingerprint, so the common case needs no transport line.
         let transport = self
             .transport
-            .ok_or_else(|| Error::NotConfigured("updater transport not set".into()))?;
+            .unwrap_or_else(|| Box::new(HttpTransport::new(&fingerprint)));
         // An unset channel resolves to the default, matching a producer that
         // built with no explicit channel.
         let channel = if self.channel.is_empty() {

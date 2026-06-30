@@ -370,16 +370,14 @@ fn guidance(report: &DoctorReport) -> String {
          \x20    fn rsupd_updater() -> rsupd::Result<rsupd::Updater> {{\n\
          \x20        rsupd::Updater::builder(env!(\"CARGO_PKG_NAME\"), env!(\"CARGO_PKG_VERSION\"))\n\
          \x20            .fingerprint(RSUPD_FINGERPRINT)\n\
-         \x20            .channel(\"stable\")\n\
-         \x20            // Build identity (from build.rs) so a same-version rebuild is\n\
-         \x20            // still seen as newer; safe to drop if you don't need that.\n\
+         \x20            // Optional: detect newer builds of the SAME version (needs build.rs).\n\
          \x20            .git_tag(env!(\"RSUPD_GIT_TAG\"))\n\
          \x20            .date_tag(rsupd::date_tag_from_unix(env!(\"RSUPD_BUILD_UNIX\")))\n\
-         \x20            .transport(/* your rsupd::Transport */)\n\
-         \x20            .build()\n\
+         \x20            .build() // fetches from the default dist-go host\n\
          \x20    }}\n\n\
-         \x20  (The RSUPD_GIT_TAG / RSUPD_BUILD_UNIX env vars come from a build.rs —\n\
-         \x20   run `rsupd publish --setup-ci` to create it.)\n\n"
+         \x20  Channel defaults to \"master\" (matching `rsupd publish` with no --channel).\n\
+         \x20  The RSUPD_GIT_TAG / RSUPD_BUILD_UNIX env vars come from a build.rs —\n\
+         \x20  run `rsupd publish --setup-ci` to create it.\n\n"
     ));
 
     g.push_str(
