@@ -1,5 +1,5 @@
-//! Producer-side test: requires the `cli` feature.
-#![cfg(feature = "cli")]
+//! Producer-side test: requires the `_cli` feature.
+#![cfg(feature = "_cli")]
 //! End-to-end producer → consumer round trip, exercised entirely offline:
 //! generate an identity, stage a fake project, build a signed package, then
 //! verify + install it through an [`Updater`] over a [`ZipPackageTransport`].

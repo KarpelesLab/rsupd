@@ -143,8 +143,8 @@ a crates.io tarball) these are empty and the comparison falls back to plain semv
 
 ## Producer — building and publishing a release
 
-The producer is the `rsupd` CLI, which lives behind the crate's non-default `cli` feature:
-`cargo install rsupd --features cli` (or use a prebuilt binary). The library you depend on in
+The producer is the `rsupd` CLI, which lives behind the crate's non-default `_cli` feature:
+`cargo install rsupd --features _cli` (or use a prebuilt binary). The library you depend on in
 your app needs no feature — it's the consumer updater by default.
 
 ```sh

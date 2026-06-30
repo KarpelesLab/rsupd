@@ -11,8 +11,8 @@ categories = ["development-tools", "command-line-utilities"]
 build = "build.rs"
 
 [package.metadata.docs.rs]
-# Document the full API (producer + consumer); the producer is behind `cli`.
-features = ["cli"]
+# Document the full API (producer + consumer); the producer is behind `_cli`.
+features = ["_cli"]
 
 [lib]
 name = "rsupd"
@@ -22,14 +22,14 @@ path = "src/lib.rs"
 name = "rsupd"
 path = "src/bin/rsupd.rs"
 # The producer/CLI; the library half (the updater) is the default.
-required-features = ["cli"]
+required-features = ["_cli"]
 
 [features]
 # Default is the consumer updater only — a small surface.
 default = []
 # The producer side: building, signing, packaging, publishing, the doctor, and
 # the `rsupd` binary. Pulls the upload client and JSON.
-cli = ["dep:klbfw", "dep:serde_json"]
+_cli = ["dep:klbfw", "dep:serde_json"]
 
 [dependencies]
 bottlers = "0.1.1"

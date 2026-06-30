@@ -1,6 +1,6 @@
 //! Static self-check (`rsupd::doctor`) over staged consumer projects.
-//! Producer-side test: requires the `cli` feature.
-#![cfg(feature = "cli")]
+//! Producer-side test: requires the `_cli` feature.
+#![cfg(feature = "_cli")]
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

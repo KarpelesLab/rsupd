@@ -58,7 +58,7 @@ jobs:
           echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
 
       - name: Build
-        run: cargo build --release --locked --features cli --target ${{ matrix.target }}
+        run: cargo build --release --locked --features _cli --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -86,8 +86,8 @@ jobs:
 
       - name: Build universal binaries
         run: |
-          cargo build --release --locked --features cli --target x86_64-apple-darwin
-          cargo build --release --locked --features cli --target aarch64-apple-darwin
+          cargo build --release --locked --features _cli --target x86_64-apple-darwin
+          cargo build --release --locked --features _cli --target aarch64-apple-darwin
           mkdir -p universal
           for bin in rsupd; do
             lipo -create -output "universal/$bin" \
@@ -123,7 +123,7 @@ jobs:
       # rsupd publishes itself: build from this commit rather than `cargo install`
       # (which would use the previously released rsupd).
       - name: Build rsupd
-        run: cargo build --release --locked --features cli --bin rsupd
+        run: cargo build --release --locked --features _cli --bin rsupd
 
       - name: Build, sign and upload
         env:
