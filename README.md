@@ -21,9 +21,14 @@ There are two sides and one rule.
   ───────────────────────────              ──────────────────────────────────────
   has the private signing key              embeds only the 32-byte public fingerprint
   builds + signs a release  ──────────────▶  fetches it, verifies the signature against
-  uploads it to a host                       the embedded fingerprint, checks the binary
+  uploads it to rsupd                        the embedded fingerprint, checks the binary
                                              hash, then atomically swaps itself
 ```
+
+rsupd (the hosting service) is free for anyone to publish to. It only stores bytes — it
+never holds your keys and cannot forge or force an update, because the signing key (yours)
+is the sole source of trust. A compromised or malicious host can withhold updates, but it
+can never make your users install something you didn't sign.
 
 **The rule:** the consumer trusts exactly one thing — the **fingerprint** (a 32-byte SHA-256
 of the project's signing public key) that you compile into it. Everything else (the manifest,
@@ -128,6 +133,10 @@ a crates.io tarball) these are empty and the comparison falls back to plain semv
 
 ## Producer — building and publishing a release
 
+The producer is the `rsupd` CLI, which lives behind the crate's non-default `cli` feature:
+`cargo install rsupd --features cli` (or use a prebuilt binary). The library you depend on in
+your app needs no feature — it's the consumer updater by default.
+
 ```sh
 # 1. one-time: create the project signing identity, and export its fingerprint
 rsupd id init   --project myapp
@@ -164,8 +173,10 @@ required item is missing, so it doubles as a CI / pre-release gate.
 
 ## Distribution layout
 
-`rsupd publish` uploads to the KLB `Cloud/Rust:upload` endpoint, which stores the package contents
-on the `dist-go` host. The layout (where `<name>` is the base64url of the project fingerprint):
+`rsupd publish` uploads to the `Cloud/Rust:upload` endpoint of the rsupd hosting service — a free
+file host for anyone distributing rsupd-signed releases. It stores bytes only: no account-bound
+keys, and (as above) it can't influence what your users accept, since trust comes entirely from
+your signature. The layout (where `<name>` is the base64url of the project fingerprint):
 
 ```
 https://dist-go.tristandev.net/rust/<name>/MANIFEST-<channel>     ← moving pointer to the latest manifest
