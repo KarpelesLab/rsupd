@@ -67,7 +67,15 @@ const BUILD_UNIX: &str = env!("RSUPD_BUILD_UNIX");
 /// Mirrors the producer's manifest `date_tag`, so the updater can tell a newer
 /// build of the same version from an older one.
 pub fn build_date_tag() -> String {
-    match BUILD_UNIX.parse::<i64>() {
+    date_tag_from_unix(BUILD_UNIX)
+}
+
+/// Formats a decimal Unix-seconds string as a `YYYYMMDDhhmmss` UTC stamp, or
+/// `""` if it is empty or unparseable. Consuming crates whose own `build.rs`
+/// captures a commit time (e.g. into `RSUPD_BUILD_UNIX`) use this to feed
+/// [`Updater`]'s `date_tag`: `.date_tag(rsupd::date_tag_from_unix(env!("RSUPD_BUILD_UNIX")))`.
+pub fn date_tag_from_unix(unix: &str) -> String {
+    match unix.trim().parse::<i64>() {
         Ok(secs) if secs > 0 => package::format_date_tag(secs),
         _ => String::new(),
     }

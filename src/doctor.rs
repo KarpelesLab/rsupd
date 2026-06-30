@@ -59,6 +59,11 @@ pub struct DoctorReport {
     pub bins: Vec<BinReport>,
     /// Whether the updater is wired anywhere in `src/` (even if not in an entry).
     pub crate_wired: bool,
+    /// Whether a `build.rs` capturing the build identity is present (so the
+    /// updater can detect newer builds of the same version).
+    pub build_identity: bool,
+    /// Path of a detected CI build config (GitHub/GitLab), if any.
+    pub ci_config: Option<String>,
 }
 
 impl DoctorReport {
@@ -113,7 +118,34 @@ pub fn check(project_dir: &Path, project_override: Option<&str>) -> Result<Docto
         fingerprint: fingerprint_state,
         bins,
         crate_wired,
+        build_identity: has_build_identity(project_dir),
+        ci_config: detect_ci_config(project_dir),
     })
+}
+
+/// Whether a `build.rs` is present that emits the build identity the updater
+/// uses (detected by the `RSUPD_BUILD_UNIX` emit).
+fn has_build_identity(project_dir: &Path) -> bool {
+    std::fs::read_to_string(project_dir.join("build.rs"))
+        .map(|t| t.contains("RSUPD_BUILD_UNIX"))
+        .unwrap_or(false)
+}
+
+/// Finds a CI build config (`.gitlab-ci.yml` or a `.github/workflows/*.yml`).
+fn detect_ci_config(project_dir: &Path) -> Option<String> {
+    let gitlab = project_dir.join(".gitlab-ci.yml");
+    if gitlab.exists() {
+        return Some(gitlab.display().to_string());
+    }
+    let workflows = project_dir.join(".github").join("workflows");
+    let entries = std::fs::read_dir(&workflows).ok()?;
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "yml" || x == "yaml") {
+            return Some(p.display().to_string());
+        }
+    }
+    None
 }
 
 fn has_wire_markers(text: &str) -> bool {
@@ -247,8 +279,32 @@ impl DoctorReport {
             ));
         }
 
+        // Recommended-but-not-required setup for distribution + self-update.
+        // Each line names the flag that sets it up when something is missing.
+        s.push_str("\nRecommended for distribution & self-update:\n");
+        s.push_str(&format!(
+            "  [{}] build identity (build.rs)   {}\n",
+            tick(self.build_identity),
+            if self.build_identity {
+                String::new()
+            } else {
+                "→ run `rsupd publish --setup-ci`".into()
+            }
+        ));
+        match &self.ci_config {
+            Some(path) => s.push_str(&format!("  [ok ] CI build config            {path}\n")),
+            None => s.push_str(
+                "  [MISSING] CI build config        → run `rsupd publish --setup-ci`\n",
+            ),
+        }
+
         if self.ok() {
             s.push_str("\nAll binaries wire up the rsupd updater. ✓\n");
+            if !self.build_identity || self.ci_config.is_none() {
+                s.push_str(
+                    "Some recommended items above are missing; see the flag next to each.\n",
+                );
+            }
             return s;
         }
 
@@ -291,9 +347,15 @@ fn guidance(report: &DoctorReport) -> String {
          \x20        rsupd::Updater::builder(env!(\"CARGO_PKG_NAME\"), env!(\"CARGO_PKG_VERSION\"))\n\
          \x20            .fingerprint(RSUPD_FINGERPRINT)\n\
          \x20            .channel(\"stable\")\n\
+         \x20            // Build identity (from build.rs) so a same-version rebuild is\n\
+         \x20            // still seen as newer; safe to drop if you don't need that.\n\
+         \x20            .git_tag(env!(\"RSUPD_GIT_TAG\"))\n\
+         \x20            .date_tag(rsupd::date_tag_from_unix(env!(\"RSUPD_BUILD_UNIX\")))\n\
          \x20            .transport(/* your rsupd::Transport */)\n\
          \x20            .build()\n\
-         \x20    }}\n\n"
+         \x20    }}\n\n\
+         \x20  (The RSUPD_GIT_TAG / RSUPD_BUILD_UNIX env vars come from a build.rs —\n\
+         \x20   run `rsupd publish --setup-ci` to create it.)\n\n"
     ));
 
     g.push_str(
