@@ -27,13 +27,18 @@ flowchart LR
     end
     subgraph C["Consumer · rsupd::Updater"]
         direction TB
-        F["embeds the 32-byte<br/>public fingerprint"] --> V["verify signature<br/>against fingerprint"]
+        F["carries the project's<br/>32-byte fingerprint"] --> V["verify signature<br/>against fingerprint"]
         V --> D["download +<br/>check binary hash"]
         D --> S["atomic self-swap"]
     end
     B -- upload --> M
     M -- fetch --> V
+    K -. "rsupd id export<br/>(embedded once, at build)" .-> F
 ```
+
+(Producer and consumer are usually the **same project** — rsupd itself is both. The fingerprint is
+the producer's, derived from its signing key and compiled into the consumer at build time; only the
+*private key* stays producer-only.)
 
 rsupd (the hosting service) is free for anyone to publish to. It only stores bytes — it
 never holds your keys and cannot forge or force an update, because the signing key (yours)
