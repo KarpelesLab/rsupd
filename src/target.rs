@@ -121,8 +121,14 @@ mod tests {
     #[test]
     fn macos_universal() {
         // The pseudo-triple maps to the documented universal label.
-        assert_eq!(label_for_triple(DARWIN_UNIVERSAL_TRIPLE), DARWIN_UNIVERSAL_LABEL);
-        assert_eq!(label_for_triple(DARWIN_UNIVERSAL_TRIPLE), "darwin_universal");
+        assert_eq!(
+            label_for_triple(DARWIN_UNIVERSAL_TRIPLE),
+            DARWIN_UNIVERSAL_LABEL
+        );
+        assert_eq!(
+            label_for_triple(DARWIN_UNIVERSAL_TRIPLE),
+            "darwin_universal"
+        );
         assert!(is_apple("aarch64-apple-darwin"));
         assert!(is_apple(DARWIN_UNIVERSAL_TRIPLE));
         assert!(!is_apple("x86_64-unknown-linux-gnu"));

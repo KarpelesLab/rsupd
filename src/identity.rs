@@ -87,7 +87,7 @@ impl Identity {
     /// used to supply the signing identity in CI without writing it to disk.
     pub const IDENTITY_ENV: &str = "RSUPD_IDENTITY";
 
-    /// Loads `project`'s identity, preferring the base64 [`IDENTITY_ENV`]
+    /// Loads `project`'s identity, preferring the base64 [`Self::IDENTITY_ENV`]
     /// environment variable (the whole `identity.bin`, as set by a CI secret)
     /// over the on-disk file. This lets a publish job supply the signing key via
     /// `RSUPD_IDENTITY` with no filesystem setup.
