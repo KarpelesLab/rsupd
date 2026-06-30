@@ -54,6 +54,25 @@ pub use update::{HttpTransport, Transport, Updater, ZipPackageTransport};
 /// [`current_label`].
 pub const TARGET: &str = env!("RSUPD_TARGET");
 
+/// The git short hash this build was compiled from, or `""` when built outside a
+/// git checkout. Used as the updater's build identity (an exact match means
+/// "same build, no update").
+pub const BUILD_GIT_TAG: &str = env!("RSUPD_GIT_TAG");
+
+/// The commit Unix timestamp this build was compiled from, as a decimal string,
+/// or `""` when unknown. See [`build_date_tag`] for the formatted form.
+const BUILD_UNIX: &str = env!("RSUPD_BUILD_UNIX");
+
+/// This build's commit date as a `YYYYMMDDhhmmss` UTC stamp, or `""` if unknown.
+/// Mirrors the producer's manifest `date_tag`, so the updater can tell a newer
+/// build of the same version from an older one.
+pub fn build_date_tag() -> String {
+    match BUILD_UNIX.parse::<i64>() {
+        Ok(secs) if secs > 0 => package::format_date_tag(secs),
+        _ => String::new(),
+    }
+}
+
 /// The channel an empty channel string resolves to, on both producer and
 /// consumer. A producer with no explicit channel tracks its git branch and
 /// falls back to this; a consumer that leaves its channel unset matches it.

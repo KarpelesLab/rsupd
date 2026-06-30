@@ -810,6 +810,11 @@ fn confirm(prompt: &str) -> rsupd::Result<bool> {
 
 fn run_version() -> rsupd::Result<()> {
     println!("rsupd {}", env!("CARGO_PKG_VERSION"));
+    let (git, date) = (rsupd::BUILD_GIT_TAG, rsupd::build_date_tag());
+    if !git.is_empty() || !date.is_empty() {
+        let git = if git.is_empty() { "unknown" } else { git };
+        println!("build:  {git} {date}");
+    }
     println!("target: {}", rsupd::TARGET);
     Ok(())
 }
@@ -822,6 +827,11 @@ fn run_update(args: &[String]) -> rsupd::Result<()> {
     let updater = rsupd::Updater::builder("rsupd", env!("CARGO_PKG_VERSION"))
         .fingerprint(FINGERPRINT)
         .channel(channel)
+        // Feed in this build's identity so a same-version release only updates
+        // when it is a strictly newer build (by git date); an identical build
+        // (same git hash) is skipped.
+        .date_tag(rsupd::build_date_tag())
+        .git_tag(rsupd::BUILD_GIT_TAG)
         // A CLI just swaps its binary in place; the next invocation is the new one.
         .auto_restart(false)
         .transport(Box::new(transport))
