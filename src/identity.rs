@@ -83,6 +83,30 @@ impl Identity {
         Ok(id)
     }
 
+    /// Name of the environment variable holding a base64-encoded `identity.bin`,
+    /// used to supply the signing identity in CI without writing it to disk.
+    pub const IDENTITY_ENV: &str = "RSUPD_IDENTITY";
+
+    /// Loads `project`'s identity, preferring the base64 [`IDENTITY_ENV`]
+    /// environment variable (the whole `identity.bin`, as set by a CI secret)
+    /// over the on-disk file. This lets a publish job supply the signing key via
+    /// `RSUPD_IDENTITY` with no filesystem setup.
+    pub fn load_env_or_file(project: &str, password: Option<&[u8]>) -> Result<Self> {
+        if let Ok(b64) = std::env::var(Self::IDENTITY_ENV) {
+            let b64 = b64.trim();
+            if !b64.is_empty() {
+                use base64::Engine;
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map_err(|e| {
+                        Error::Other(format!("{} base64 decode: {e}", Self::IDENTITY_ENV))
+                    })?;
+                return Self::from_bytes(project, &data, password);
+            }
+        }
+        Self::load(project, password)
+    }
+
     /// Loads `project`'s identity from the standard path.
     pub fn load(project: &str, password: Option<&[u8]>) -> Result<Self> {
         let path = config::identity_path(project)?;

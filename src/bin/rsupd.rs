@@ -137,7 +137,8 @@ fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBu
         .project
         .clone()
         .unwrap_or_else(|| discovered.name.clone());
-    let identity = Identity::load(&project, password.as_deref())?;
+    // Prefers the RSUPD_IDENTITY env var (CI secret) over the on-disk identity.
+    let identity = Identity::load_env_or_file(&project, password.as_deref())?;
 
     let mut build = BuildOptions::new(project_dir);
     build.channel = opts.channel.clone().unwrap_or_default();
@@ -237,6 +238,7 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
 }
 
 /// Which CI provider's artifacts to pull from.
+#[derive(Clone, Copy)]
 enum CiProvider {
     GitHub,
     GitLab,
@@ -246,16 +248,74 @@ enum CiProvider {
 /// one triple-named artifact per target — the layout `--ci` consumes. The build
 /// config is generated from the project's own `[[bin]]` names.
 fn run_setup_ci(project_dir: &Path, opts: &Flags) -> rsupd::Result<()> {
-    let bins = package::discover(project_dir)?.bins;
+    let discovered = package::discover(project_dir)?;
+    let (project, bins) = (discovered.name, discovered.bins);
     if bins.is_empty() {
         return Err(err("no [[bin]] targets found to build"));
     }
+    let provider = detect_provider(project_dir, opts)?;
+
     // build.rs captures the build identity the updater needs (provider-agnostic).
     setup_build_rs(project_dir)?;
-    match detect_provider(project_dir, opts)? {
-        CiProvider::GitHub => setup_github_ci(project_dir, &bins),
-        CiProvider::GitLab => setup_gitlab_ci(project_dir, &bins),
+    match provider {
+        CiProvider::GitHub => setup_github_ci(project_dir, &bins, opts.full)?,
+        CiProvider::GitLab => setup_gitlab_ci(project_dir, &bins, opts.full)?,
     }
+
+    // --full: also upload the signing identity as a CI secret so the publish job
+    // can sign releases unattended.
+    if opts.full {
+        upload_identity_secret(project_dir, &project, provider, opts.assume_yes)?;
+    }
+    Ok(())
+}
+
+/// Reads the project's identity, base64-encodes it, and stores it as the
+/// `RSUPD_IDENTITY` CI secret/variable (`gh`/`glab`). Prompts first, since this
+/// pushes private signing-key material to the forge.
+fn upload_identity_secret(
+    project_dir: &Path,
+    project: &str,
+    provider: CiProvider,
+    assume_yes: bool,
+) -> rsupd::Result<()> {
+    let path = rsupd::config::identity_path(project)?;
+    let bytes = std::fs::read(&path).map_err(|_| {
+        err(format!(
+            "no identity to upload at {} — run `rsupd id init --project {project}` first",
+            path.display()
+        ))
+    })?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    if !assume_yes {
+        println!();
+        println!("This uploads the PRIVATE signing identity");
+        println!("  {}", path.display());
+        println!("as the CI secret RSUPD_IDENTITY so the pipeline can sign releases.");
+        println!("Anyone with admin access to the repo's secrets could then sign as you.");
+        if !confirm("Upload the identity as a CI secret? [y/N] ")? {
+            println!("skipped; the publish job won't be able to sign until RSUPD_IDENTITY is set");
+            return Ok(());
+        }
+    }
+
+    match provider {
+        CiProvider::GitHub => {
+            run_cmd_stdin(project_dir, "gh", &["secret", "set", "RSUPD_IDENTITY"], b64.as_bytes())?;
+        }
+        CiProvider::GitLab => {
+            run_cmd_stdin(
+                project_dir,
+                "glab",
+                &["variable", "set", "RSUPD_IDENTITY", "--masked"],
+                b64.as_bytes(),
+            )?;
+        }
+    }
+    println!("ci: stored the identity in the RSUPD_IDENTITY secret");
+    Ok(())
 }
 
 /// Creates `build.rs` capturing the git build identity (the updater's
@@ -283,8 +343,9 @@ fn setup_build_rs(project_dir: &Path) -> rsupd::Result<()> {
     Ok(())
 }
 
-/// Writes `.github/workflows/build.yml` (a dedicated file we own).
-fn setup_github_ci(project_dir: &Path, bins: &[String]) -> rsupd::Result<()> {
+/// Writes `.github/workflows/build.yml` (a dedicated file we own). When `full`,
+/// appends a tag-gated `publish` job that signs and uploads the release.
+fn setup_github_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Result<()> {
     let mut paths = String::new();
     for b in bins {
         for ext in ["", ".exe"] {
@@ -294,9 +355,13 @@ fn setup_github_ci(project_dir: &Path, bins: &[String]) -> rsupd::Result<()> {
             paths.push('\n');
         }
     }
-    let content = GITHUB_BUILD_YML
+    let mut content = GITHUB_BUILD_YML
         .replace("__ARTIFACT_PATHS__\n", &paths)
         .replace("__BINS__", &bins.join(" "));
+    if full {
+        content.push('\n');
+        content.push_str(GITHUB_PUBLISH_JOB);
+    }
 
     let dir = project_dir.join(".github").join("workflows");
     std::fs::create_dir_all(&dir)?;
@@ -305,7 +370,7 @@ fn setup_github_ci(project_dir: &Path, bins: &[String]) -> rsupd::Result<()> {
 
 /// Creates or edits `.gitlab-ci.yml`, managing only an rsupd-marked block so an
 /// existing pipeline is preserved.
-fn setup_gitlab_ci(project_dir: &Path, bins: &[String]) -> rsupd::Result<()> {
+fn setup_gitlab_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Result<()> {
     let mut unix = String::new();
     let mut win = String::new();
     for b in bins {
@@ -316,9 +381,14 @@ fn setup_gitlab_ci(project_dir: &Path, bins: &[String]) -> rsupd::Result<()> {
         win.push_str(b);
         win.push_str(".exe\n");
     }
-    let block = GITLAB_CI_BLOCK
+    let mut block = GITLAB_CI_BLOCK
         .replace("__UNIX_PATHS__\n", &unix)
         .replace("__WIN_PATHS__\n", &win);
+    if full {
+        // Insert the publish job just before the closing marker.
+        let end = "# <<< rsupd-ci <<<";
+        block = block.replace(end, &format!("{GITLAB_PUBLISH_JOB}{end}"));
+    }
 
     let (begin, end) = ("# >>> rsupd-ci >>>", "# <<< rsupd-ci <<<");
     let path = project_dir.join(".gitlab-ci.yml");
@@ -623,6 +693,63 @@ fn main() {
 }
 "#;
 
+/// Tag-gated `publish` job appended to the GitHub workflow by `--setup-ci
+/// --full`. rsupd reads the signing identity straight from the RSUPD_IDENTITY
+/// env (the CI secret), so there is no filesystem setup.
+const GITHUB_PUBLISH_JOB: &str = r#"  # Build, sign and upload the release. Runs only on tags. Needs the
+  # RSUPD_IDENTITY secret (base64 of identity.bin) — set by
+  # `rsupd publish --setup-ci --full`.
+  publish:
+    name: publish
+    needs: [build, macos-universal]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install rsupd
+        run: cargo install rsupd --locked
+
+      - name: Build, sign and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RSUPD_IDENTITY: ${{ secrets.RSUPD_IDENTITY }}
+        run: rsupd publish --ci --run ${{ github.run_id }} --yes
+"#;
+
+/// GitLab `publish` job (tags only) inserted into the managed block by
+/// `--setup-ci --full`. Pulls each build job's artifacts via `needs` (restored
+/// under `target/<triple>/release/`) and publishes locally; rsupd reads the
+/// signing identity from the RSUPD_IDENTITY CI/CD variable automatically.
+const GITLAB_PUBLISH_JOB: &str = r#"
+publish:
+  stage: deploy
+  image: rust:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+  # Pull every build job's artifacts (restored under target/<triple>/release/).
+  needs:
+    - x86_64-unknown-linux-gnu
+    - aarch64-unknown-linux-gnu
+    - job: aarch64-apple-darwin
+      optional: true
+    - job: x86_64-apple-darwin
+      optional: true
+    - job: x86_64-pc-windows-msvc
+      optional: true
+  script:
+    - cargo install rsupd --locked
+    - rsupd publish --yes
+
+"#;
+
 /// GitHub Actions workflow scaffolded by `--setup-ci`. `__ARTIFACT_PATHS__` is
 /// replaced with the project's per-bin artifact paths and `__BINS__` with the
 /// space-separated bin names (for the macOS `lipo` loop).
@@ -834,6 +961,38 @@ fn find_file(root: &Path, names: &[String]) -> Option<PathBuf> {
     None
 }
 
+/// Like [`run_cmd_in`] but feeds `input` to the child's stdin (used to hand a
+/// secret to `gh`/`glab` without exposing it in argv).
+fn run_cmd_stdin(dir: &Path, program: &str, args: &[&str], input: &[u8]) -> rsupd::Result<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = std::process::Command::new(program)
+        .current_dir(dir)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| err(format!("running `{program}`: {e}")))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| err(format!("{program}: no stdin")))?
+        .write_all(input)
+        .map_err(|e| err(format!("writing to `{program}`: {e}")))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| err(format!("`{program}`: {e}")))?;
+    if !out.status.success() {
+        return Err(err(format!(
+            "`{program} {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// Runs `program args...` in `dir`, returning trimmed stdout, or an error
 /// carrying stderr. Running in `dir` lets `gh`/`glab` auto-resolve the repo.
 fn run_cmd_in(dir: &Path, program: &str, args: &[&str]) -> rsupd::Result<String> {
@@ -993,6 +1152,7 @@ struct Flags {
     verbose: bool,
     ci: bool,
     setup_ci: bool,
+    full: bool,
     provider: Option<String>,
     run_id: Option<String>,
     repo: Option<String>,
@@ -1025,6 +1185,7 @@ impl Flags {
                 "--verbose" | "-v" => f.verbose = true,
                 "--ci" => f.ci = true,
                 "--setup-ci" => f.setup_ci = true,
+                "--full" => f.full = true,
                 "--provider" => f.provider = Some(take()),
                 "--run" => f.run_id = Some(take()),
                 "--repo" => f.repo = Some(take()),
@@ -1080,7 +1241,7 @@ USAGE:
   rsupd publish    [<build flags>...] [-y] [-v]
                    [--ci [--provider github|gitlab] [--run ID]
                          [--repo OWNER/REPO] [--commit SHA|REF]]
-                   [--setup-ci [--provider github|gitlab]]
+                   [--setup-ci [--full] [--provider github|gitlab]]
   rsupd version
   rsupd update     [--channel C]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
@@ -1097,7 +1258,9 @@ CI config file (.github/workflows or .gitlab-ci.yml) and uses `gh` (GitHub) or
 for HEAD that has artifacts is used.
 
 `--setup-ci` instead creates/edits that build config (a GitHub Actions
-workflow or .gitlab-ci.yml) for the project's bins, then exits."
+workflow or .gitlab-ci.yml) plus a build.rs, then exits. Add `--full` to also
+upload the signing identity as the RSUPD_IDENTITY secret and add a tag-gated
+job that builds, signs and uploads the release with rsupd."
     );
 }
 
