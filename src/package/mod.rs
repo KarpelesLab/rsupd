@@ -58,7 +58,8 @@ impl TargetNaming {
 pub struct BuildOptions {
     /// Project root holding `Cargo.toml` and `target/`.
     pub project_dir: PathBuf,
-    /// Release channel (`""` = default/stable).
+    /// Release channel. Empty = derive from the git branch name at build time,
+    /// falling back to `"master"` when detached or outside a repo.
     pub channel: String,
     /// Override the version string. Defaults to the Cargo.toml `[package] version`.
     pub version: Option<String>,
@@ -133,6 +134,14 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
     let released = commit_time.unwrap_or_else(now_unix);
     let date_tag = format_date_tag(released);
 
+    // No explicit channel: track the current git branch, falling back to the
+    // default channel when detached or outside a repo.
+    let channel = if opts.channel.is_empty() {
+        git_branch(&project.root).unwrap_or_else(|| crate::DEFAULT_CHANNEL.to_string())
+    } else {
+        opts.channel.clone()
+    };
+
     let mut zw = zip::ZipWriter::new();
     let mut artifacts = Vec::new();
 
@@ -199,7 +208,7 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
     let manifest = Manifest {
         v: FORMAT_VERSION,
         project: identity.project().to_string(),
-        channel: opts.channel.clone(),
+        channel,
         version,
         date_tag,
         git_tag,
@@ -225,6 +234,15 @@ fn git_info(root: &Path) -> (String, Option<i64>) {
     let commit_time =
         run_git(root, &["log", "-1", "--format=%ct"]).and_then(|s| s.trim().parse::<i64>().ok());
     (git_tag, commit_time)
+}
+
+/// Reads the current git branch name for `root`, or `None` when detached
+/// (`HEAD`) or outside a repository.
+fn git_branch(root: &Path) -> Option<String> {
+    match run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+        Some(b) if b != "HEAD" => Some(b),
+        _ => None,
+    }
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {

@@ -34,6 +34,7 @@ pub mod error;
 pub mod identity;
 pub mod manifest;
 pub mod package;
+pub mod publish;
 pub mod target;
 pub mod update;
 
@@ -52,3 +53,8 @@ pub use update::{Transport, Updater, ZipPackageTransport};
 /// `os_arch` label that identifies an [`Artifact`] is derived from it by
 /// [`current_label`].
 pub const TARGET: &str = env!("RSUPD_TARGET");
+
+/// The channel an empty channel string resolves to, on both producer and
+/// consumer. A producer with no explicit channel tracks its git branch and
+/// falls back to this; a consumer that leaves its channel unset matches it.
+pub const DEFAULT_CHANNEL: &str = "master";

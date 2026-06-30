@@ -78,7 +78,7 @@ pub struct Manifest {
     pub v: u32,
     /// Project name.
     pub project: String,
-    /// Release channel (`""` for the default/stable channel).
+    /// Release channel (typically the producer's git branch, e.g. `master`).
     pub channel: String,
     /// Semantic version string (the consumer's `CARGO_PKG_VERSION`).
     pub version: String,

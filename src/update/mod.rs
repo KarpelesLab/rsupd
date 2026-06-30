@@ -209,7 +209,8 @@ pub struct UpdaterBuilder {
 }
 
 impl UpdaterBuilder {
-    /// Sets the release channel (default `""`).
+    /// Sets the release channel. An empty/unset channel resolves to
+    /// [`crate::DEFAULT_CHANNEL`].
     pub fn channel(mut self, channel: impl Into<String>) -> Self {
         self.channel = channel.into();
         self
@@ -261,9 +262,16 @@ impl UpdaterBuilder {
         let transport = self
             .transport
             .ok_or_else(|| Error::NotConfigured("updater transport not set".into()))?;
+        // An unset channel resolves to the default, matching a producer that
+        // built with no explicit channel.
+        let channel = if self.channel.is_empty() {
+            crate::DEFAULT_CHANNEL.to_string()
+        } else {
+            self.channel
+        };
         Ok(Updater {
             project: self.project,
-            channel: self.channel,
+            channel,
             cur_version: self.cur_version,
             cur_date_tag: self.cur_date_tag,
             cur_git_tag: self.cur_git_tag,
