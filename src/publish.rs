@@ -8,10 +8,36 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use klbfw::RestContext;
+use klbfw::{RestContext, RestError};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+
+/// Renders a klbfw error with the platform's request id / token attached when
+/// present, so a server-side failure can be traced in the platform logs.
+fn rest_detail(e: &RestError) -> String {
+    if let RestError::Api {
+        message,
+        code,
+        request_id,
+        response,
+    } = e
+    {
+        let mut s = message.clone();
+        if let Some(c) = code {
+            s.push_str(&format!(" (code {c})"));
+        }
+        if let Some(rid) = request_id {
+            s.push_str(&format!(" [X-Request-Id: {rid}]"));
+        }
+        if let Some(tok) = &response.token {
+            s.push_str(&format!(" [token: {tok}]"));
+        }
+        s
+    } else {
+        e.to_string()
+    }
+}
 
 /// The REST endpoint that negotiates a release upload.
 pub const UPLOAD_ENDPOINT: &str = "Cloud/Rust:upload";
@@ -36,7 +62,7 @@ pub fn upload_package(filename: &str, bytes: Vec<u8>) -> Result<Value> {
         "application/zip",
         None,
     )
-    .map_err(|e| Error::Other(format!("upload to {UPLOAD_ENDPOINT} failed: {e}")))?;
+    .map_err(|e| Error::Other(format!("upload to {UPLOAD_ENDPOINT} failed: {}", rest_detail(&e))))?;
 
     response
         .apply::<Value>()
