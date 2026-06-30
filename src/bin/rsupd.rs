@@ -195,7 +195,7 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
         return Ok(());
     }
 
-    let result = rsupd::publish::upload_package(&filename, built.bytes)?;
+    let result = rsupd::publish::upload_package(&filename, built.bytes, opts.verbose)?;
     println!("upload complete:");
     println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
     Ok(())
@@ -295,6 +295,7 @@ struct Flags {
     password: bool,
     no_compress: bool,
     assume_yes: bool,
+    verbose: bool,
     positional: Vec<String>,
 }
 
@@ -320,6 +321,7 @@ impl Flags {
                 "--password" => f.password = true,
                 "--no-compress" => f.no_compress = true,
                 "--yes" | "-y" => f.assume_yes = true,
+                "--verbose" | "-v" => f.verbose = true,
                 other => f.positional.push(other.to_string()),
             }
             i += 1;
@@ -368,7 +370,7 @@ USAGE:
   rsupd id export  [--project N] [--password] [-o FILE]
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
-  rsupd publish    [<build flags>...] [-y]
+  rsupd publish    [<build flags>...] [-y] [-v]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
   rsupd check      [-C DIR] [--project N]
 

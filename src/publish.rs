@@ -46,9 +46,10 @@ pub const UPLOAD_ENDPOINT: &str = "Cloud/Rust:upload";
 /// response data (file metadata such as `Blob__` / `SHA256` / `Size`).
 ///
 /// `filename` is the name advertised to the negotiation endpoint; `bytes` is the
-/// complete package zip ([`crate::package::BuiltPackage::bytes`]).
-pub fn upload_package(filename: &str, bytes: Vec<u8>) -> Result<Value> {
-    let ctx = RestContext::new();
+/// complete package zip ([`crate::package::BuiltPackage::bytes`]). When `verbose`
+/// is set, klbfw traces each REST request (method, path, status) to stderr.
+pub fn upload_package(filename: &str, bytes: Vec<u8>, verbose: bool) -> Result<Value> {
+    let ctx = RestContext::new().with_debug(verbose);
 
     let mut params: HashMap<String, Value> = HashMap::new();
     params.insert("filename".into(), Value::String(filename.to_string()));
