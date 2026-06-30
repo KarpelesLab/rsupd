@@ -176,10 +176,6 @@ fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBu
 fn run_publish(args: &[String]) -> rsupd::Result<()> {
     let opts = Flags::parse(args);
 
-    // Load API credentials up front so a misconfigured environment fails before
-    // we spend time building.
-    let api = rsupd::publish::ApiConfig::from_env()?;
-
     let (built, out) = build_and_write(&opts)?;
 
     let filename = out
@@ -189,18 +185,17 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
 
     println!();
     println!(
-        "About to upload {} ({} bytes) to {} via {}",
+        "About to upload {} ({} bytes) via {}",
         filename,
         built.bytes.len(),
-        api.host_label(),
-        rsupd::publish::UPLOAD_ENDPOINT
+        rsupd::publish::UPLOAD_ENDPOINT,
     );
     if !opts.assume_yes && !confirm("Upload this release? [y/N] ")? {
         println!("aborted; package left at {}", out.display());
         return Ok(());
     }
 
-    let result = rsupd::publish::upload_package(&api, &filename, built.bytes)?;
+    let result = rsupd::publish::upload_package(&filename, built.bytes)?;
     println!("upload complete:");
     println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
     Ok(())
@@ -379,11 +374,7 @@ USAGE:
 
 Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/.
 
-`publish` builds (like `build`), confirms, then uploads to Cloud/Rest:upload.
-It authenticates with API credentials from the environment:
-  RSUPD_API_KEY     API key id
-  RSUPD_API_SECRET  base64-encoded Ed25519 secret
-  RSUPD_API_HOST    optional API host override"
+`publish` builds (like `build`), confirms, then uploads to Cloud/Rust:upload."
     );
 }
 
