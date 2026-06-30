@@ -232,7 +232,7 @@ fn run_update(args: &[String]) -> rsupd::Result<()> {
     let opts = Flags::parse(args);
     let channel = opts.channel.clone().unwrap_or_default();
 
-    let transport = rsupd::HttpTransport::with_default_base(FINGERPRINT);
+    let transport = rsupd::HttpTransport::new(FINGERPRINT);
     let updater = rsupd::Updater::builder("rsupd", env!("CARGO_PKG_VERSION"))
         .fingerprint(FINGERPRINT)
         .channel(channel)

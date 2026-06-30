@@ -72,40 +72,33 @@ impl Transport for ZipPackageTransport {
     }
 }
 
-/// A [`Transport`] backed by the `dist-go` HTTP distribution host.
+/// The distribution host releases are fetched from. Deliberately fixed: there
+/// is no way to point the updater at a different origin. Note this is not the
+/// security boundary — authenticity comes from the manifest's signature against
+/// the embedded fingerprint, so a hostile origin still cannot forge an update.
+/// Pinning it just keeps every consumer fetching from the one canonical place.
+pub const DIST_HOST: &str = "https://dist-go.tristandev.net/";
+
+/// A [`Transport`] backed by the fixed [`DIST_HOST`] distribution host.
 ///
 /// Layout (mirroring the producer's S3 store), where `name` is the
 /// base64url-no-pad encoding of the 32-byte project fingerprint:
 ///
 /// ```text
-/// <base>/rust/<name>/MANIFEST-<channel>       moving pointer to the latest manifest
-/// <base>/rust/<name>/<version>/<filename>     each immutable artifact
+/// <DIST_HOST>/rust/<name>/MANIFEST-<channel>     moving pointer to the latest manifest
+/// <DIST_HOST>/rust/<name>/<version>/<filename>   each immutable artifact
 /// ```
 pub struct HttpTransport {
-    base: String,
     name: String,
 }
 
 impl HttpTransport {
-    /// The default public distribution host.
-    pub const DEFAULT_BASE: &'static str = "https://dist-go.tristandev.net/";
-
-    /// Builds a transport against `base_url` for the project identified by its
-    /// 32-byte `fingerprint`. A trailing slash on `base_url` is optional.
-    pub fn new(base_url: &str, fingerprint: &[u8]) -> Self {
+    /// Builds a transport for the project identified by its 32-byte
+    /// `fingerprint`. The origin is always [`DIST_HOST`] and cannot be changed.
+    pub fn new(fingerprint: &[u8]) -> Self {
         use base64::Engine;
         let name = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(fingerprint);
-        let base = if base_url.ends_with('/') {
-            base_url.to_string()
-        } else {
-            format!("{base_url}/")
-        };
-        HttpTransport { base, name }
-    }
-
-    /// Builds a transport against [`DEFAULT_BASE`](Self::DEFAULT_BASE).
-    pub fn with_default_base(fingerprint: &[u8]) -> Self {
-        Self::new(Self::DEFAULT_BASE, fingerprint)
+        HttpTransport { name }
     }
 
     /// GETs `url`, returning the body on a 2xx and an error otherwise.
@@ -121,7 +114,7 @@ impl HttpTransport {
 
 impl Transport for HttpTransport {
     fn latest_manifest(&self, _project: &str, channel: &str) -> Result<Vec<u8>> {
-        self.get(&format!("{}rust/{}/MANIFEST-{channel}", self.base, self.name))
+        self.get(&format!("{DIST_HOST}rust/{}/MANIFEST-{channel}", self.name))
     }
 
     fn fetch_artifact(
@@ -132,8 +125,8 @@ impl Transport for HttpTransport {
         artifact: &Artifact,
     ) -> Result<Vec<u8>> {
         self.get(&format!(
-            "{}rust/{}/{version}/{}",
-            self.base, self.name, artifact.filename
+            "{DIST_HOST}rust/{}/{version}/{}",
+            self.name, artifact.filename
         ))
     }
 }

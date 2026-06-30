@@ -10,7 +10,7 @@ const FINGERPRINT: &[u8] = include_bytes!("../rsupd.fpr");
 #[test]
 #[ignore = "hits the live dist-go.tristandev.net host"]
 fn downloads_verifies_and_installs_latest() {
-    let transport = HttpTransport::with_default_base(FINGERPRINT);
+    let transport = HttpTransport::new(FINGERPRINT);
 
     // Claim an ancient current version so the published release is always newer.
     let updater = Updater::builder("rsupd", "0.0.0")
