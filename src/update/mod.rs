@@ -20,8 +20,9 @@ pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// A verified, newer release discovered by [`Updater::check`].
 pub struct Available {
-    /// The verified manifest describing the new release.
-    pub manifest: Manifest,
+    /// The verified manifest describing the new release (kept private so the
+    /// manifest type stays out of the consumer's public surface).
+    manifest: Manifest,
 }
 
 impl Available {

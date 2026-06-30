@@ -715,7 +715,7 @@ const GITHUB_PUBLISH_JOB: &str = r#"  # Build, sign and upload the release. Runs
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install rsupd
-        run: cargo install rsupd --locked
+        run: cargo install rsupd --locked --features cli
 
       - name: Build, sign and upload
         env:
@@ -745,7 +745,7 @@ publish:
     - job: x86_64-pc-windows-msvc
       optional: true
   script:
-    - cargo install rsupd --locked
+    - cargo install rsupd --locked --features cli
     - rsupd publish --yes
 
 "#;

@@ -24,28 +24,76 @@
 //! caller via the [`update::Transport`] trait; an offline
 //! [`update::ZipPackageTransport`] reads packages produced by this same crate so
 //! the whole flow can be exercised without a server.
+//!
+//! # Features
+//!
+//! The default build is the **consumer** updater only — a small surface
+//! ([`Updater`], [`Transport`], [`HttpTransport`], [`Available`], plus
+//! [`Error`]/[`Result`]). The **producer** half (building, signing, packaging,
+//! publishing, the doctor, and the `rsupd` binary) is behind the non-default
+//! **`cli`** feature.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+// Without the `cli` feature the producer half is compiled but unused (only the
+// `rsupd` binary and the `cli`-gated re-exports reach it); silence dead-code
+// noise for that configuration. Consumers never see it — cargo suppresses
+// dependency warnings.
+#![cfg_attr(not(feature = "cli"), allow(unused))]
 
-pub mod config;
-pub mod doctor;
+// --- Consumer (updater) surface: always public, intentionally small ---------
 pub mod error;
-pub mod identity;
-pub mod manifest;
-pub mod package;
-pub mod publish;
-pub mod target;
 pub mod update;
 
-pub use doctor::DoctorReport;
 pub use error::{Error, Result};
-pub use identity::Identity;
-pub use manifest::{Artifact, Hash, Manifest};
-pub use package::TargetNaming;
-pub use target::{current_label, label_for_triple};
+pub use manifest::{Artifact, Hash};
 pub use update::restart::honor_startup_delay;
-pub use update::{HttpTransport, Transport, Updater, ZipPackageTransport};
+pub use update::{Available, HttpTransport, Transport, Updater, ZipPackageTransport};
+
+// --- Shared internals: public only with the producer (`cli`) feature --------
+// These modules are needed by the updater internally, so they always compile,
+// but they are part of the public API only when building the producer/CLI.
+#[cfg(feature = "cli")]
+pub mod identity;
+#[cfg(not(feature = "cli"))]
+pub(crate) mod identity;
+
+#[cfg(feature = "cli")]
+pub mod manifest;
+#[cfg(not(feature = "cli"))]
+pub(crate) mod manifest;
+
+#[cfg(feature = "cli")]
+pub mod package;
+#[cfg(not(feature = "cli"))]
+pub(crate) mod package;
+
+#[cfg(feature = "cli")]
+pub mod target;
+#[cfg(not(feature = "cli"))]
+pub(crate) mod target;
+
+#[cfg(feature = "cli")]
+pub mod config;
+#[cfg(not(feature = "cli"))]
+pub(crate) mod config;
+
+// --- Producer-only modules and re-exports: only with the `cli` feature ------
+#[cfg(feature = "cli")]
+pub mod doctor;
+#[cfg(feature = "cli")]
+pub mod publish;
+
+#[cfg(feature = "cli")]
+pub use doctor::DoctorReport;
+#[cfg(feature = "cli")]
+pub use identity::Identity;
+#[cfg(feature = "cli")]
+pub use manifest::Manifest;
+#[cfg(feature = "cli")]
+pub use package::TargetNaming;
+#[cfg(feature = "cli")]
+pub use target::{current_label, label_for_triple};
 
 /// The Rust target triple this build of rsupd is running on, e.g.
 /// `x86_64-unknown-linux-gnu`. Captured at compile time by `build.rs`. It names
