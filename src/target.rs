@@ -17,6 +17,20 @@ pub fn current_label() -> String {
     label_for_triple(crate::TARGET)
 }
 
+/// Pseudo-triple under which a single macOS universal (fat) binary is published.
+/// Its `os_arch` label is [`DARWIN_UNIVERSAL_LABEL`].
+pub const DARWIN_UNIVERSAL_TRIPLE: &str = "universal-apple-darwin";
+
+/// `os_arch` label of a macOS universal (fat) binary — one artifact serving
+/// every Apple arch.
+pub const DARWIN_UNIVERSAL_LABEL: &str = "darwin_universal";
+
+/// Whether `triple` targets macOS/Apple (so a universal binary applies).
+pub fn is_apple(triple: &str) -> bool {
+    (triple.contains("apple") || triple.contains("darwin") || triple.contains("macos"))
+        && !triple.contains("ios")
+}
+
 /// Derives the OS component from a triple. Order matters: `android` and the
 /// BSDs must be checked before the generic substrings they may also contain.
 fn os_of(triple: &str) -> &'static str {
@@ -57,6 +71,8 @@ fn arch_of(triple: &str) -> &'static str {
         "x86_64" | "amd64" => "amd64",
         "x86" | "i686" | "i586" | "i386" => "386",
         "aarch64" | "arm64" => "arm64",
+        // A macOS universal (fat) binary built with `lipo`; not a real arch.
+        "universal" => "universal",
         a if a.starts_with("armv") || a == "arm" || a.starts_with("thumbv") => "arm",
         a if a.starts_with("riscv64") => "riscv64",
         a if a.starts_with("riscv32") => "riscv32",
@@ -100,5 +116,16 @@ mod tests {
             label_for_triple("riscv64gc-unknown-linux-gnu"),
             "linux_riscv64"
         );
+    }
+
+    #[test]
+    fn macos_universal() {
+        // The pseudo-triple maps to the documented universal label.
+        assert_eq!(label_for_triple(DARWIN_UNIVERSAL_TRIPLE), DARWIN_UNIVERSAL_LABEL);
+        assert_eq!(label_for_triple(DARWIN_UNIVERSAL_TRIPLE), "darwin_universal");
+        assert!(is_apple("aarch64-apple-darwin"));
+        assert!(is_apple(DARWIN_UNIVERSAL_TRIPLE));
+        assert!(!is_apple("x86_64-unknown-linux-gnu"));
+        assert!(!is_apple("aarch64-apple-ios"));
     }
 }

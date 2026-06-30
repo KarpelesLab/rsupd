@@ -633,10 +633,10 @@ jobs:
 __ARTIFACT_PATHS__
           if-no-files-found: error
 
-  # macOS: build both arches and fuse them into one universal binary, published
-  # under each Apple target so a consumer matches by its own arch.
+  # macOS: build both arches and fuse them into ONE universal (fat) binary,
+  # published as a single `universal-apple-darwin` artifact that any Mac matches.
   macos-universal:
-    name: apple-darwin (universal)
+    name: universal-apple-darwin
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -658,17 +658,10 @@ __ARTIFACT_PATHS__
               "target/aarch64-apple-darwin/release/$bin"
           done
 
-      - name: Upload x86_64-apple-darwin
+      - name: Upload universal-apple-darwin
         uses: actions/upload-artifact@v4
         with:
-          name: x86_64-apple-darwin
-          path: universal/
-          if-no-files-found: error
-
-      - name: Upload aarch64-apple-darwin
-        uses: actions/upload-artifact@v4
-        with:
-          name: aarch64-apple-darwin
+          name: universal-apple-darwin
           path: universal/
           if-no-files-found: error
 "#;

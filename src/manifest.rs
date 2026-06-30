@@ -110,6 +110,17 @@ impl Manifest {
     pub fn artifact_for_host(&self) -> Option<&Artifact> {
         self.artifact_for(crate::TARGET)
             .or_else(|| self.artifact_for(&crate::target::current_label()))
+            .or_else(|| self.universal_for_host())
+    }
+
+    /// On an Apple host, a single macOS universal (fat) binary covers every
+    /// arch; match it by its label or pseudo-triple. `None` off Apple.
+    fn universal_for_host(&self) -> Option<&Artifact> {
+        if !crate::target::is_apple(crate::TARGET) {
+            return None;
+        }
+        self.artifact_for(crate::target::DARWIN_UNIVERSAL_LABEL)
+            .or_else(|| self.artifact_for(crate::target::DARWIN_UNIVERSAL_TRIPLE))
     }
 
     /// Encodes the manifest as a standalone (unsigned) CBOR document.
