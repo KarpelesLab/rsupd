@@ -97,6 +97,14 @@ pub fn install_bytes(target: &Path, data: &[u8]) -> Result<()> {
     }
 
     if had_old && std::fs::remove_file(&old_path).is_err() {
+        // Couldn't delete the prior binary (e.g. a running Windows executable).
+        // Before hiding it, best-effort restrict its permissions so a
+        // predictable, world-readable copy isn't left behind. Best-effort only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&old_path, std::fs::Permissions::from_mode(0o600));
+        }
         let _ = hide_file(&old_path);
     }
     Ok(())
@@ -116,22 +124,35 @@ pub fn sidecar_paths(target: &Path) -> Option<(PathBuf, PathBuf)> {
 #[cfg(unix)]
 fn write_executable(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    // Clear any stale or attacker-planted sidecar first. `remove_file` unlinks a
+    // symlink itself rather than following it to its target, so the `create_new`
+    // below cannot be redirected through a planted symlink. `create_new` then
+    // guarantees we open a freshly created regular file (failing if one
+    // reappears), so we never reuse/follow an existing file or inherit its perms.
+    let _ = std::fs::remove_file(path);
     let mut f = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o755)
         .open(path)?;
     f.write_all(data)?;
     f.sync_all()?;
+    // Force exactly 0o755 regardless of the process umask.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
 fn write_executable(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
-    let mut f = std::fs::File::create(path)?;
+    // Clear any stale/planted sidecar, then create a fresh file (failing if one
+    // reappears) rather than truncating an existing one.
+    let _ = std::fs::remove_file(path);
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
     f.write_all(data)?;
     f.sync_all()?;
     Ok(())

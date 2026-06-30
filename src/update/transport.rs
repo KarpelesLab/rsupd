@@ -79,6 +79,12 @@ impl Transport for ZipPackageTransport {
 /// Pinning it just keeps every consumer fetching from the one canonical place.
 pub const DIST_HOST: &str = "https://dist-go.tristandev.net/";
 
+/// Sanity cap on the manifest body size. A signed manifest is small; this is a
+/// light amplification guard so a hostile origin can't make us buffer a huge
+/// response before signature verification. The real backstop is rsurl's own
+/// 256 MiB cap — this is just a tighter bound for the manifest specifically.
+const MAX_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
+
 /// A [`Transport`] backed by the fixed [`DIST_HOST`] distribution host.
 ///
 /// Layout (mirroring the producer's S3 store), where `name` is the
@@ -103,10 +109,12 @@ impl HttpTransport {
 
     /// GETs `url`, returning the body on a 2xx and an error otherwise.
     fn get(&self, url: &str) -> Result<Vec<u8>> {
-        let resp =
-            rsurl::get(url).map_err(|e| Error::Other(format!("GET {url} failed: {e}")))?;
+        let resp = rsurl::get(url).map_err(|e| Error::Other(format!("GET {url} failed: {e}")))?;
         if !(200..300).contains(&resp.status) {
-            return Err(Error::Other(format!("GET {url} returned HTTP {}", resp.status)));
+            return Err(Error::Other(format!(
+                "GET {url} returned HTTP {}",
+                resp.status
+            )));
         }
         Ok(resp.body)
     }
@@ -114,7 +122,14 @@ impl HttpTransport {
 
 impl Transport for HttpTransport {
     fn latest_manifest(&self, _project: &str, channel: &str) -> Result<Vec<u8>> {
-        self.get(&format!("{DIST_HOST}rust/{}/MANIFEST-{channel}", self.name))
+        let body = self.get(&format!("{DIST_HOST}rust/{}/MANIFEST-{channel}", self.name))?;
+        if body.len() > MAX_MANIFEST_BYTES {
+            return Err(Error::Malformed(format!(
+                "manifest exceeds sanity cap of {MAX_MANIFEST_BYTES} bytes ({} received)",
+                body.len()
+            )));
+        }
+        Ok(body)
     }
 
     fn fetch_artifact(

@@ -158,7 +158,9 @@ impl<'a> ZipReader<'a> {
             let extra_len = read_u16(data, p + 30)? as usize;
             let comment_len = read_u16(data, p + 32)? as usize;
             let local_offset = read_u32(data, p + 42)?;
-            let name_start = p + 46;
+            let name_start = p
+                .checked_add(46)
+                .ok_or_else(|| Error::Malformed("zip offset overflow".into()))?;
             let name = std::str::from_utf8(slice(data, name_start, name_len)?)
                 .map_err(|_| Error::Malformed("non-utf8 zip entry name".into()))?
                 .to_string();
@@ -178,7 +180,11 @@ impl<'a> ZipReader<'a> {
                 size: comp_size,
                 crc,
             });
-            p = name_start + name_len + extra_len + comment_len;
+            p = name_start
+                .checked_add(name_len)
+                .and_then(|v| v.checked_add(extra_len))
+                .and_then(|v| v.checked_add(comment_len))
+                .ok_or_else(|| Error::Malformed("zip offset overflow".into()))?;
         }
         Ok(ZipReader { data, entries })
     }
@@ -201,7 +207,11 @@ impl<'a> ZipReader<'a> {
         }
         let name_len = read_u16(self.data, off + 26)? as usize;
         let extra_len = read_u16(self.data, off + 28)? as usize;
-        let data_start = off + 30 + name_len + extra_len;
+        let data_start = off
+            .checked_add(30)
+            .and_then(|v| v.checked_add(name_len))
+            .and_then(|v| v.checked_add(extra_len))
+            .ok_or_else(|| Error::Malformed("zip offset overflow".into()))?;
         let bytes = slice(self.data, data_start, e.size as usize)?.to_vec();
         if crc32(&bytes) != e.crc {
             return Err(Error::Malformed(format!("zip entry {name:?} CRC mismatch")));
@@ -227,7 +237,12 @@ fn find_eocd(data: &[u8]) -> Result<usize> {
 }
 
 fn slice(data: &[u8], start: usize, len: usize) -> Result<&[u8]> {
-    data.get(start..start + len)
+    // Use checked arithmetic so a malicious zip can't wrap `start + len` (which
+    // would panic in debug or produce a wrapped range) on 32-bit targets.
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| Error::Malformed("zip read out of bounds".into()))?;
+    data.get(start..end)
         .ok_or_else(|| Error::Malformed("zip read out of bounds".into()))
 }
 
