@@ -23,6 +23,8 @@ bottlers = "0.1.1"
 purecrypto = "0.6.20"
 compcol = { version = "0.6.3", default-features = false, features = ["std", "zstd"] }
 ciborium = "0.2"
+klbfw = "0.1.1"
+serde_json = "1.0"
 
 [dev-dependencies]
 

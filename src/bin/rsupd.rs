@@ -7,7 +7,7 @@
 //! rsupd id export  [--project N] [-o FILE]
 //! rsupd build      [--project-dir DIR] [--channel C] [--target T]... [--bin B]...
 //!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
-//!                  [--no-compress] [-o OUT.zip]
+//! rsupd publish    [<build flags>...] [-y]
 //! rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
 //! rsupd check      [-C DIR] [--project N]
 //! ```
@@ -37,6 +37,7 @@ fn run(args: &[String]) -> rsupd::Result<()> {
     match cmd {
         Some("id") => run_id(&rest),
         Some("build") => run_build(&rest),
+        Some("publish") => run_publish(&rest),
         Some("inspect") => run_inspect(&rest),
         Some("check") => run_check(&rest),
         Some("help") | Some("--help") | Some("-h") | None => {
@@ -108,6 +109,14 @@ fn run_id(args: &[String]) -> rsupd::Result<()> {
 
 fn run_build(args: &[String]) -> rsupd::Result<()> {
     let opts = Flags::parse(args);
+    build_and_write(&opts)?;
+    Ok(())
+}
+
+/// Builds a package from `opts`, writes the zip to disk, prints a summary, and
+/// returns the built package alongside the output path it was written to. Shared
+/// by `build` and `publish`.
+fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBuf)> {
     let project_dir = opts
         .project_dir
         .clone()
@@ -161,7 +170,53 @@ fn run_build(args: &[String]) -> rsupd::Result<()> {
             a.target, a.compression, a.raw_size, a.size
         );
     }
+    Ok((built, out))
+}
+
+fn run_publish(args: &[String]) -> rsupd::Result<()> {
+    let opts = Flags::parse(args);
+
+    // Load API credentials up front so a misconfigured environment fails before
+    // we spend time building.
+    let api = rsupd::publish::ApiConfig::from_env()?;
+
+    let (built, out) = build_and_write(&opts)?;
+
+    let filename = out
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{}.zip", built.manifest.project));
+
+    println!();
+    println!(
+        "About to upload {} ({} bytes) to {} via {}",
+        filename,
+        built.bytes.len(),
+        api.host_label(),
+        rsupd::publish::UPLOAD_ENDPOINT
+    );
+    if !opts.assume_yes && !confirm("Upload this release? [y/N] ")? {
+        println!("aborted; package left at {}", out.display());
+        return Ok(());
+    }
+
+    let result = rsupd::publish::upload_package(&api, &filename, built.bytes)?;
+    println!("upload complete:");
+    println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
     Ok(())
+}
+
+/// Prompts on stderr and returns true only for an explicit yes.
+fn confirm(prompt: &str) -> rsupd::Result<bool> {
+    use std::io::Write;
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| err(format!("reading confirmation: {e}")))?;
+    let ans = line.trim().to_ascii_lowercase();
+    Ok(ans == "y" || ans == "yes")
 }
 
 fn run_inspect(args: &[String]) -> rsupd::Result<()> {
@@ -244,6 +299,7 @@ struct Flags {
     bins: Vec<String>,
     password: bool,
     no_compress: bool,
+    assume_yes: bool,
     positional: Vec<String>,
 }
 
@@ -268,6 +324,7 @@ impl Flags {
                 "--bin" | "-b" => f.bins.push(take()),
                 "--password" => f.password = true,
                 "--no-compress" => f.no_compress = true,
+                "--yes" | "-y" => f.assume_yes = true,
                 other => f.positional.push(other.to_string()),
             }
             i += 1;
@@ -316,10 +373,17 @@ USAGE:
   rsupd id export  [--project N] [--password] [-o FILE]
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
+  rsupd publish    [<build flags>...] [-y]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
   rsupd check      [-C DIR] [--project N]
 
-Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/."
+Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/.
+
+`publish` builds (like `build`), confirms, then uploads to Cloud/Rest:upload.
+It authenticates with API credentials from the environment:
+  RSUPD_API_KEY     API key id
+  RSUPD_API_SECRET  base64-encoded Ed25519 secret
+  RSUPD_API_HOST    optional API host override"
     );
 }
 
