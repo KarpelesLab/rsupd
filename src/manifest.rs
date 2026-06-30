@@ -18,6 +18,15 @@ use crate::identity::{Identity, fingerprint_of};
 /// Current manifest format version.
 pub const FORMAT_VERSION: u32 = 1;
 
+/// Maximum size of a signed manifest bottle accepted by
+/// [`Manifest::open_and_verify`]. A signed manifest is attacker-controlled and
+/// is fed into CBOR parsing before any trust decision, so we cap its size to
+/// limit decode-time amplification. NOTE: this only bounds amplification; a
+/// deeply-nested CBOR document within this cap can still stack-overflow the
+/// parser. A complete fix requires depth-limited CBOR parsing upstream
+/// (ciborium) and remains a known limitation.
+const MAX_SIGNED_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
+
 /// A hash over an artifact's uncompressed contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hash {
@@ -152,6 +161,15 @@ impl Manifest {
     /// and the manifest bottle is signed by that same primary key. Only then is
     /// the parsed manifest returned.
     pub fn open_and_verify(signed: &[u8], expected_fingerprint: &[u8]) -> Result<Manifest> {
+        // Cheap amplification guard: reject oversized attacker-controlled input
+        // before it ever reaches the CBOR parser. See MAX_SIGNED_MANIFEST_BYTES.
+        if signed.len() > MAX_SIGNED_MANIFEST_BYTES {
+            return Err(Error::VerifyFailed(format!(
+                "signed manifest is {} bytes, exceeding the {} byte limit",
+                signed.len(),
+                MAX_SIGNED_MANIFEST_BYTES
+            )));
+        }
         let (payload, info) = Opener::empty().open_cbor(signed)?;
         let manifest = Manifest::from_cbor(&payload)?;
 

@@ -20,7 +20,17 @@ pub fn base_dir() -> Result<PathBuf> {
 /// Returns the directory holding `project`'s identity and state, e.g.
 /// `~/.config/rsupd/<project>`. The directory is not created.
 pub fn project_dir(project: &str) -> Result<PathBuf> {
-    if project.is_empty() || project.contains(['/', '\\']) || project == ".." {
+    // Strict allowlist: a project name must be non-empty, contain only ASCII
+    // alphanumerics or `._-`, and not be `.` or `..`. This rejects path
+    // separators, the current-dir alias `.`, parent-dir `..`, and Windows
+    // drive-relative names like `C:foo` (which contain `:` but no slash).
+    let valid = !project.is_empty()
+        && project
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && project != "."
+        && project != "..";
+    if !valid {
         return Err(Error::Other(format!("invalid project name: {project:?}")));
     }
     let mut dir = base_dir()?;
@@ -76,4 +86,22 @@ fn platform_config_dir() -> Result<PathBuf> {
             p
         })
         .ok_or_else(|| Error::Other("cannot determine $HOME or $XDG_CONFIG_HOME".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_dir_rejects_unsafe_names() {
+        for bad in ["", ".", "..", "C:foo", "a/b", "a\\b", "foo bar", "naïve"] {
+            assert!(project_dir(bad).is_err(), "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn project_dir_accepts_safe_name() {
+        let dir = project_dir("my-app_1.0").expect("name should be accepted");
+        assert!(dir.ends_with("my-app_1.0"));
+    }
 }
