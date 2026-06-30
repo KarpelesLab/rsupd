@@ -285,15 +285,18 @@ fn upload_identity_secret(
     provider: CiProvider,
     assume_yes: bool,
 ) -> rsupd::Result<()> {
+    use zeroize::Zeroizing;
     let path = rsupd::config::identity_path(project)?;
-    let bytes = std::fs::read(&path).map_err(|_| {
+    // The identity bytes and their base64 are private key material; wipe them
+    // from memory when this function returns.
+    let bytes = Zeroizing::new(std::fs::read(&path).map_err(|_| {
         err(format!(
             "no identity to upload at {} — run `rsupd id init --project {project}` first",
             path.display()
         ))
-    })?;
+    })?);
     use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let b64 = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(&*bytes));
 
     if !assume_yes {
         println!();
@@ -1050,7 +1053,11 @@ fn find_file(root: &Path, names: &[String]) -> Option<PathBuf> {
 fn run_cmd_stdin(dir: &Path, program: &str, args: &[&str], input: &[u8]) -> rsupd::Result<String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = std::process::Command::new(program)
+    // Resolve via PATH (never the cwd) so a tool planted in `dir` can't intercept
+    // the secret we're about to pipe in.
+    let exe = rsupd::util::resolve_program(program)
+        .ok_or_else(|| err(format!("`{program}` not found on PATH")))?;
+    let mut child = std::process::Command::new(&exe)
         .current_dir(dir)
         .args(args)
         .stdin(Stdio::piped())
@@ -1080,7 +1087,11 @@ fn run_cmd_stdin(dir: &Path, program: &str, args: &[&str], input: &[u8]) -> rsup
 /// Runs `program args...` in `dir`, returning trimmed stdout, or an error
 /// carrying stderr. Running in `dir` lets `gh`/`glab` auto-resolve the repo.
 fn run_cmd_in(dir: &Path, program: &str, args: &[&str]) -> rsupd::Result<String> {
-    let out = std::process::Command::new(program)
+    // Resolve via PATH (never the cwd) so a tool planted in the untrusted `dir`
+    // cannot be executed in place of the real `gh`/`glab`/`git`.
+    let exe = rsupd::util::resolve_program(program)
+        .ok_or_else(|| err(format!("`{program}` not found on PATH")))?;
+    let out = std::process::Command::new(&exe)
         .current_dir(dir)
         .args(args)
         .output()
@@ -1305,13 +1316,14 @@ impl Flags {
         eprint!("{prompt}");
         use std::io::Write;
         std::io::stderr().flush().ok();
+        use zeroize::Zeroize;
         let mut line = String::new();
         std::io::stdin()
             .read_line(&mut line)
             .map_err(|e| err(format!("reading password: {e}")))?;
-        Ok(Some(
-            line.trim_end_matches(['\n', '\r']).as_bytes().to_vec(),
-        ))
+        let pw = line.trim_end_matches(['\n', '\r']).as_bytes().to_vec();
+        line.zeroize();
+        Ok(Some(pw))
     }
 }
 

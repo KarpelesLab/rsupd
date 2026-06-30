@@ -246,7 +246,9 @@ fn git_branch(root: &Path) -> Option<String> {
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
+    // Resolve `git` via PATH so a `git` planted in the project dir can't be run.
+    let git = crate::util::resolve_program("git")?;
+    let out = std::process::Command::new(&git)
         .arg("-C")
         .arg(root)
         .args(args)

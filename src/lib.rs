@@ -78,6 +78,11 @@ pub mod config;
 #[cfg(not(feature = "_cli"))]
 pub(crate) mod config;
 
+#[cfg(feature = "_cli")]
+pub mod util;
+#[cfg(not(feature = "_cli"))]
+pub(crate) mod util;
+
 // --- Producer-only modules and re-exports: only with the `_cli` feature ------
 #[cfg(feature = "_cli")]
 pub mod doctor;

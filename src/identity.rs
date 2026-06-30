@@ -22,6 +22,8 @@ use purecrypto::ec::Ed25519PrivateKey;
 use purecrypto::ec::x25519::X25519PrivateKey;
 use purecrypto::rng::OsRng;
 
+use zeroize::{Zeroize, Zeroizing};
+
 use crate::config;
 use crate::error::{Error, Result};
 
@@ -92,17 +94,20 @@ impl Identity {
     /// over the on-disk file. This lets a publish job supply the signing key via
     /// `RSUPD_IDENTITY` with no filesystem setup.
     pub fn load_env_or_file(project: &str, password: Option<&[u8]>) -> Result<Self> {
-        if let Ok(b64) = std::env::var(Self::IDENTITY_ENV) {
-            let b64 = b64.trim();
-            if !b64.is_empty() {
+        if let Ok(mut b64) = std::env::var(Self::IDENTITY_ENV) {
+            if !b64.trim().is_empty() {
                 use base64::Engine;
-                let data = base64::engine::general_purpose::STANDARD
-                    .decode(b64)
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(b64.trim())
                     .map_err(|e| {
                         Error::Other(format!("{} base64 decode: {e}", Self::IDENTITY_ENV))
-                    })?;
+                    });
+                // Wipe the encoded secret from the env copy before doing anything else.
+                b64.zeroize();
+                let data = Zeroizing::new(decoded?);
                 return Self::from_bytes(project, &data, password);
             }
+            b64.zeroize();
         }
         Self::load(project, password)
     }
@@ -116,7 +121,7 @@ impl Identity {
                 path.display()
             )));
         }
-        let data = std::fs::read(&path)?;
+        let data = Zeroizing::new(std::fs::read(&path)?);
         Self::from_bytes(project, &data, password)
     }
 
@@ -153,10 +158,12 @@ impl Identity {
 
     /// Serializes the identity to `identity.bin` bytes.
     pub fn to_bytes(&self, password: Option<&[u8]>) -> Result<Vec<u8>> {
-        let keychain_bytes = self.keychain.serialize(password)?;
+        // The serialized keychain is private key material (plaintext when there
+        // is no keychain password); wipe our copy once it's been encoded.
+        let keychain_bytes = Zeroizing::new(self.keychain.serialize(password)?);
         let value = Value::Array(vec![
             Value::Integer(IDENTITY_FORMAT.into()),
-            Value::Bytes(keychain_bytes),
+            Value::Bytes(keychain_bytes.to_vec()),
             Value::Bytes(self.signed_idcard.clone()),
         ]);
         let mut out = Vec::new();
@@ -172,7 +179,7 @@ impl Identity {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let bytes = self.to_bytes(password)?;
+        let bytes = Zeroizing::new(self.to_bytes(password)?);
         write_private(&path, &bytes)?;
         Ok(())
     }
