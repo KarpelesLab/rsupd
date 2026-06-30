@@ -7,14 +7,14 @@
 //! rsupd id export  [--project N] [-o FILE]
 //! rsupd build      [--project-dir DIR] [--channel C] [--target T]... [--bin B]...
 //!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
-//! rsupd publish    [<build flags>...] [-y]
+//! rsupd publish    [<build flags>...] [-y] [--ci [--run ID] [--repo R] [--commit SHA]]
 //! rsupd version
 //! rsupd update     [--channel C]
 //! rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
 //! rsupd check      [-C DIR] [--project N]
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rsupd::identity::Identity;
@@ -182,7 +182,25 @@ fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBu
 }
 
 fn run_publish(args: &[String]) -> rsupd::Result<()> {
-    let opts = Flags::parse(args);
+    let mut opts = Flags::parse(args);
+
+    // --ci: instead of reading binaries from the local target/ tree, download
+    // them from a GitHub Actions run and stage them so the normal build picks
+    // them up. Restrict the build to exactly the targets we staged.
+    if opts.ci {
+        let project_dir = opts
+            .project_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+        let staged = stage_ci_binaries(&project_dir, &opts)?;
+        if staged.is_empty() {
+            return Err(err(
+                "no binaries matching this project's [[bin]] names were found in the CI artifacts",
+            ));
+        }
+        println!("ci: staged targets: {}", staged.join(", "));
+        opts.targets = staged;
+    }
 
     let (built, out) = build_and_write(&opts)?;
 
@@ -207,6 +225,137 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
     println!("upload complete:");
     println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
     Ok(())
+}
+
+/// Downloads a GitHub Actions run's artifacts and stages any compiled project
+/// binaries into `target/<triple>/release/`, returning the staged target
+/// triples. Convention: each build job uploads one artifact **named after the
+/// Rust target triple**, containing the compiled binary (`<bin>` or
+/// `<bin>.exe`). Requires the `gh` CLI, authenticated for the repo.
+fn stage_ci_binaries(project_dir: &Path, opts: &Flags) -> rsupd::Result<Vec<String>> {
+    let bins = package::discover(project_dir)?.bins;
+
+    let repo = match &opts.repo {
+        Some(r) => r.clone(),
+        None => run_cmd(
+            "gh",
+            &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        )?,
+    };
+    let run_id = match &opts.run_id {
+        Some(r) => r.clone(),
+        None => resolve_ci_run(project_dir, &repo, opts.commit.as_deref())?,
+    };
+
+    println!("ci: downloading artifacts from {repo} run {run_id}");
+    let tmp = std::env::temp_dir().join(format!("rsupd-ci-{}-{run_id}", std::process::id()));
+    std::fs::create_dir_all(&tmp)?;
+    let tmp_str = tmp.to_string_lossy().into_owned();
+    run_cmd("gh", &["run", "download", &run_id, "-R", &repo, "-D", &tmp_str])?;
+
+    // Each artifact extracts to <tmp>/<artifact-name>/...; treat the name as a
+    // target triple and stage any project binaries found beneath it.
+    let mut staged = Vec::new();
+    for entry in std::fs::read_dir(&tmp)? {
+        let dir = entry?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let triple = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let mut staged_any = false;
+        for bin in &bins {
+            let names = [bin.clone(), format!("{bin}.exe")];
+            if let Some(src) = find_file(&dir, &names) {
+                let destdir = project_dir.join("target").join(&triple).join("release");
+                std::fs::create_dir_all(&destdir)?;
+                let fname = src.file_name().unwrap_or_default();
+                std::fs::copy(&src, destdir.join(fname))?;
+                staged_any = true;
+            }
+        }
+        if staged_any {
+            staged.push(triple);
+        }
+    }
+    std::fs::remove_dir_all(&tmp).ok();
+    Ok(staged)
+}
+
+/// Picks the newest successful run for `commit` (default `HEAD`) that actually
+/// has artifacts, so an artifact-less run (e.g. a release-only workflow) is
+/// skipped. Override with `--run`.
+fn resolve_ci_run(project_dir: &Path, repo: &str, commit: Option<&str>) -> rsupd::Result<String> {
+    let sha = match commit {
+        Some(c) => c.to_string(),
+        None => run_cmd(
+            "git",
+            &["-C", &project_dir.to_string_lossy(), "rev-parse", "HEAD"],
+        )?,
+    };
+    let ids = run_cmd(
+        "gh",
+        &[
+            "api",
+            &format!("repos/{repo}/actions/runs?head_sha={sha}&per_page=30"),
+            "-q",
+            "[.workflow_runs[] | select(.conclusion==\"success\")] | sort_by(.created_at) | reverse | .[].id",
+        ],
+    )?;
+    for id in ids.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        let count = run_cmd(
+            "gh",
+            &[
+                "api",
+                &format!("repos/{repo}/actions/runs/{id}/artifacts"),
+                "-q",
+                ".total_count",
+            ],
+        )?;
+        if count.trim().parse::<i64>().unwrap_or(0) > 0 {
+            return Ok(id.to_string());
+        }
+    }
+    Err(err(format!(
+        "no successful CI run with artifacts found for commit {sha}; pass --run <id>"
+    )))
+}
+
+/// Recursively finds the first file under `root` whose name matches any of
+/// `names`.
+fn find_file(root: &Path, names: &[String]) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Some(name) = path.file_name().and_then(|s| s.to_str())
+                && names.iter().any(|n| n == name)
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Runs `program args...`, returning trimmed stdout, or an error carrying stderr.
+fn run_cmd(program: &str, args: &[&str]) -> rsupd::Result<String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| err(format!("running `{program}`: {e}")))?;
+    if !out.status.success() {
+        return Err(err(format!(
+            "`{program} {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Prompts on stderr and returns true only for an explicit yes.
@@ -338,6 +487,10 @@ struct Flags {
     no_compress: bool,
     assume_yes: bool,
     verbose: bool,
+    ci: bool,
+    run_id: Option<String>,
+    repo: Option<String>,
+    commit: Option<String>,
     positional: Vec<String>,
 }
 
@@ -364,6 +517,10 @@ impl Flags {
                 "--no-compress" => f.no_compress = true,
                 "--yes" | "-y" => f.assume_yes = true,
                 "--verbose" | "-v" => f.verbose = true,
+                "--ci" => f.ci = true,
+                "--run" => f.run_id = Some(take()),
+                "--repo" => f.repo = Some(take()),
+                "--commit" => f.commit = Some(take()),
                 other => f.positional.push(other.to_string()),
             }
             i += 1;
@@ -413,6 +570,7 @@ USAGE:
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
   rsupd publish    [<build flags>...] [-y] [-v]
+                   [--ci [--run ID] [--repo OWNER/REPO] [--commit SHA]]
   rsupd version
   rsupd update     [--channel C]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
@@ -420,7 +578,11 @@ USAGE:
 
 Identities live under the platform config dir, e.g. ~/.config/rsupd/<project>/.
 
-`publish` builds (like `build`), confirms, then uploads to Cloud/Rust:upload."
+`publish` builds (like `build`), confirms, then uploads to Cloud/Rust:upload.
+With `--ci`, binaries are downloaded (via `gh`) from a GitHub Actions run
+instead of the local target/ tree: each build job must upload one artifact
+named after its Rust target triple, containing the compiled binary. By default
+the newest successful run for HEAD that has artifacts is used."
     );
 }
 
