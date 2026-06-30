@@ -25,6 +25,8 @@ compcol = { version = "0.6.3", default-features = false, features = ["std", "zst
 ciborium = "0.2"
 klbfw = "0.1.1"
 serde_json = "1.0"
+rsurl = "0.1"
+base64 = "0.21"
 
 [dev-dependencies]
 

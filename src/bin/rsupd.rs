@@ -8,6 +8,8 @@
 //! rsupd build      [--project-dir DIR] [--channel C] [--target T]... [--bin B]...
 //!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
 //! rsupd publish    [<build flags>...] [-y]
+//! rsupd version
+//! rsupd update     [--channel C]
 //! rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
 //! rsupd check      [-C DIR] [--project N]
 //! ```
@@ -18,6 +20,10 @@ use std::process::ExitCode;
 use rsupd::identity::Identity;
 use rsupd::manifest::Manifest;
 use rsupd::package::{self, BuildOptions};
+
+/// rsupd's own project fingerprint (trust anchor), embedded so `rsupd update`
+/// can self-update. Produced by `rsupd id export --project rsupd`.
+const FINGERPRINT: &[u8] = include_bytes!("../../rsupd.fpr");
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +46,8 @@ fn run(args: &[String]) -> rsupd::Result<()> {
         Some("publish") => run_publish(&rest),
         Some("inspect") => run_inspect(&rest),
         Some("check") => run_check(&rest),
+        Some("version") | Some("--version") | Some("-V") => run_version(),
+        Some("update") => run_update(&rest),
         Some("help") | Some("--help") | Some("-h") | None => {
             print_usage();
             Ok(())
@@ -214,6 +222,40 @@ fn confirm(prompt: &str) -> rsupd::Result<bool> {
     Ok(ans == "y" || ans == "yes")
 }
 
+fn run_version() -> rsupd::Result<()> {
+    println!("rsupd {}", env!("CARGO_PKG_VERSION"));
+    println!("target: {}", rsupd::TARGET);
+    Ok(())
+}
+
+fn run_update(args: &[String]) -> rsupd::Result<()> {
+    let opts = Flags::parse(args);
+    let channel = opts.channel.clone().unwrap_or_default();
+
+    let transport = rsupd::HttpTransport::with_default_base(FINGERPRINT);
+    let updater = rsupd::Updater::builder("rsupd", env!("CARGO_PKG_VERSION"))
+        .fingerprint(FINGERPRINT)
+        .channel(channel)
+        // A CLI just swaps its binary in place; the next invocation is the new one.
+        .auto_restart(false)
+        .transport(Box::new(transport))
+        .build()?;
+
+    match updater.check()? {
+        None => {
+            println!("rsupd is up to date (v{})", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some(available) => {
+            let version = available.version().to_string();
+            println!("updating rsupd {} -> {version} ...", env!("CARGO_PKG_VERSION"));
+            let installed = updater.install(&available)?;
+            println!("installed v{version} to {}", installed.display());
+            Ok(())
+        }
+    }
+}
+
 fn run_inspect(args: &[String]) -> rsupd::Result<()> {
     let opts = Flags::parse(args);
     let pkg = opts
@@ -371,6 +413,8 @@ USAGE:
   rsupd build      [-C DIR] [--channel C] [--target T]... [--bin B]...
                    [--naming os_arch|triple] [--no-compress] [--project N] [-o OUT.zip]
   rsupd publish    [<build flags>...] [-y] [-v]
+  rsupd version
+  rsupd update     [--channel C]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
   rsupd check      [-C DIR] [--project N]
 

@@ -45,7 +45,7 @@ pub use manifest::{Artifact, Hash, Manifest};
 pub use package::TargetNaming;
 pub use target::{current_label, label_for_triple};
 pub use update::restart::honor_startup_delay;
-pub use update::{Transport, Updater, ZipPackageTransport};
+pub use update::{HttpTransport, Transport, Updater, ZipPackageTransport};
 
 /// The Rust target triple this build of rsupd is running on, e.g.
 /// `x86_64-unknown-linux-gnu`. Captured at compile time by `build.rs`. It names

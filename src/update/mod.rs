@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::error::{Error, Result};
 use crate::manifest::Manifest;
 
-pub use transport::{Transport, ZipPackageTransport};
+pub use transport::{HttpTransport, Transport, ZipPackageTransport};
 
 /// How often the background updater checks for a new release.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(3600);
@@ -120,9 +120,12 @@ impl Updater {
                 crate::target::current_label()
             ))
         })?;
-        let stored = self
-            .transport
-            .fetch_artifact(&self.project, &self.channel, artifact)?;
+        let stored = self.transport.fetch_artifact(
+            &self.project,
+            &self.channel,
+            &available.manifest.version,
+            artifact,
+        )?;
         let binary = install::decode_and_verify(artifact, &stored)?;
         install::install_bytes(target, &binary)
     }
