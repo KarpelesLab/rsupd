@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/KarpelesLab/rsupd/compare/v0.3.0...v0.3.1) - 2026-06-30
+
+### Other
+
+- Drop .fpr files: embed the fingerprint as hex in source
+- easier consumer setup — default transport + Getting Started
+
+### Security
+
+- resolve external tools via PATH + zeroize key material
+
 ## [0.3.0](https://github.com/KarpelesLab/rsupd/compare/v0.2.0...v0.3.0) - 2026-06-30
 
 ### Other
