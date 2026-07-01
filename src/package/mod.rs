@@ -59,9 +59,13 @@ pub struct BuildOptions {
     /// Project root holding `Cargo.toml` and `target/`.
     pub project_dir: PathBuf,
     /// Release channel. Empty = derive from the git branch name at build time,
-    /// falling back to `"master"` when detached or outside a repo.
+    /// falling back to `"master"` when detached or outside a repo. A non-default
+    /// channel is also folded into the version as a SemVer pre-release tag (see
+    /// [`version`](Self::version)).
     pub channel: String,
     /// Override the version string. Defaults to the Cargo.toml `[package] version`.
+    /// When the resolved channel is not the default (`"master"`), it is appended
+    /// as a pre-release tag, so a beta build of `1.0.0` reports `1.0.0-beta`.
     pub version: Option<String>,
     /// Target triples to include. Empty = auto-detect from `target/`.
     pub targets: Vec<String>,
@@ -124,7 +128,7 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
         ));
     }
 
-    let version = opts
+    let base_version = opts
         .version
         .clone()
         .or_else(|| project.version.clone())
@@ -140,6 +144,17 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
         git_branch(&project.root).unwrap_or_else(|| crate::DEFAULT_CHANNEL.to_string())
     } else {
         opts.channel.clone()
+    };
+
+    // Fold a non-default channel into the version as a SemVer pre-release tag, so
+    // a beta build of 1.0.0 reports 1.0.0-beta while master stays 1.0.0. Skip it
+    // when the version already carries that tag to avoid doubling it up.
+    let version = if channel != crate::DEFAULT_CHANNEL
+        && !base_version.ends_with(&format!("-{channel}"))
+    {
+        format!("{base_version}-{channel}")
+    } else {
+        base_version
     };
 
     let mut zw = zip::ZipWriter::new();

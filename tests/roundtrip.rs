@@ -125,6 +125,37 @@ fn full_roundtrip_install() {
 }
 
 #[test]
+fn non_default_channel_folds_into_version() {
+    let root = scratch("channel-version");
+    stage_project(&root, b"beta binary");
+    let identity = Identity::generate("demo").unwrap();
+
+    // An explicit non-master channel becomes a SemVer pre-release tag on the
+    // version (1.0.0 -> 1.0.0-beta), while the channel field is unchanged.
+    let mut opts = BuildOptions::new(&root);
+    opts.channel = "beta".to_string();
+    let built = package::build_package(&identity, &opts).expect("build package");
+    assert_eq!(built.manifest.channel, "beta");
+    assert_eq!(built.manifest.version, "1.0.0-beta");
+
+    // The master channel leaves the version untouched.
+    let mut opts = BuildOptions::new(&root);
+    opts.channel = "master".to_string();
+    let built = package::build_package(&identity, &opts).expect("build package");
+    assert_eq!(built.manifest.version, "1.0.0");
+
+    // Re-tagging is idempotent: a version that already carries the tag is not
+    // doubled up.
+    let mut opts = BuildOptions::new(&root);
+    opts.channel = "beta".to_string();
+    opts.version = Some("1.0.0-beta".to_string());
+    let built = package::build_package(&identity, &opts).expect("build package");
+    assert_eq!(built.manifest.version, "1.0.0-beta");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn no_update_when_current_is_newer_or_equal() {
     let root = scratch("noupdate");
     stage_project(&root, b"binary bytes here");
