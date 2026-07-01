@@ -138,3 +138,38 @@ pub fn date_tag_from_unix(unix: &str) -> String {
 /// consumer. A producer with no explicit channel tracks its git branch and
 /// falls back to this; a consumer that leaves its channel unset matches it.
 pub const DEFAULT_CHANNEL: &str = "master";
+
+/// Folds a non-default `channel` into `version` as a SemVer pre-release tag, so a
+/// beta build of `1.0.0` reports `1.0.0-beta` while master stays `1.0.0`. Applied
+/// identically on both sides — the producer stamps the manifest version, and the
+/// updater folds its own current version — so the two always agree. An empty
+/// channel resolves to [`DEFAULT_CHANNEL`] and leaves the version untouched.
+/// Idempotent: a version already carrying the tag is returned unchanged.
+pub fn version_with_channel(version: &str, channel: &str) -> String {
+    let channel = if channel.is_empty() {
+        DEFAULT_CHANNEL
+    } else {
+        channel
+    };
+    if channel != DEFAULT_CHANNEL && !version.ends_with(&format!("-{channel}")) {
+        format!("{version}-{channel}")
+    } else {
+        version.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_with_channel_folds_only_non_default() {
+        // Default channel (explicit or empty) leaves the version untouched.
+        assert_eq!(version_with_channel("1.0.0", "master"), "1.0.0");
+        assert_eq!(version_with_channel("1.0.0", ""), "1.0.0");
+        // A non-default channel becomes a pre-release tag.
+        assert_eq!(version_with_channel("1.0.0", "beta"), "1.0.0-beta");
+        // Idempotent: an already-tagged version is not doubled.
+        assert_eq!(version_with_channel("1.0.0-beta", "beta"), "1.0.0-beta");
+    }
+}

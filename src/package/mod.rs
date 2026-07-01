@@ -147,15 +147,9 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
     };
 
     // Fold a non-default channel into the version as a SemVer pre-release tag, so
-    // a beta build of 1.0.0 reports 1.0.0-beta while master stays 1.0.0. Skip it
-    // when the version already carries that tag to avoid doubling it up.
-    let version = if channel != crate::DEFAULT_CHANNEL
-        && !base_version.ends_with(&format!("-{channel}"))
-    {
-        format!("{base_version}-{channel}")
-    } else {
-        base_version
-    };
+    // a beta build of 1.0.0 reports 1.0.0-beta while master stays 1.0.0. The
+    // updater folds its own version the same way, so the two agree.
+    let version = crate::version_with_channel(&base_version, &channel);
 
     let mut zw = zip::ZipWriter::new();
     let mut artifacts = Vec::new();

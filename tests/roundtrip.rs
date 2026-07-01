@@ -156,6 +156,43 @@ fn non_default_channel_folds_into_version() {
 }
 
 #[test]
+fn beta_consumer_updates_same_version_newer_build() {
+    // A consumer built off the `beta` branch reports a bare CARGO_PKG_VERSION
+    // (1.0.0) plus `.channel("beta")` — exactly what the scaffolded build.rs
+    // wires up. The updater folds the channel into its own version to match the
+    // manifest's 1.0.0-beta, so a newer build of the SAME version (later
+    // date_tag) is still detected as an update.
+    let root = scratch("beta-datetag");
+    stage_project(&root, b"newer beta build");
+    let identity = Identity::generate("demo").unwrap();
+    let fingerprint = identity.fingerprint();
+
+    let mut opts = BuildOptions::new(&root);
+    opts.channel = "beta".to_string();
+    let built = package::build_package(&identity, &opts).expect("build package");
+    assert_eq!(built.manifest.version, "1.0.0-beta");
+    let pkg_date = built.manifest.date_tag.clone();
+    assert!(!pkg_date.is_empty());
+
+    // Consumer: same core version, beta channel, but an older build stamp.
+    let updater = Updater::builder("demo", "1.0.0")
+        .channel("beta")
+        .date_tag("19990101000000")
+        .fingerprint(fingerprint)
+        .auto_restart(false)
+        .transport(Box::new(ZipPackageTransport::from_bytes(built.bytes)))
+        .build()
+        .unwrap();
+    let available = updater
+        .check()
+        .unwrap()
+        .expect("newer beta build is an update");
+    assert_eq!(available.version(), "1.0.0-beta");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn no_update_when_current_is_newer_or_equal() {
     let root = scratch("noupdate");
     stage_project(&root, b"binary bytes here");

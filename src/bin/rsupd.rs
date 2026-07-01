@@ -723,7 +723,8 @@ fn download_gitlab_artifacts(project_dir: &Path, opts: &Flags, tmp: &Path) -> rs
 
 /// `build.rs` scaffolded by `--setup-ci`, capturing the git build identity the
 /// rsupd updater uses to tell a newer build of the same version from an older
-/// one. Wire it in with:
+/// one, plus the branch that names the release channel. Wire it in with:
+///   `.channel(env!("RSUPD_CHANNEL"))`
 ///   `.git_tag(env!("RSUPD_GIT_TAG"))`
 ///   `.date_tag(rsupd::date_tag_from_unix(env!("RSUPD_BUILD_UNIX")))`
 const BUILD_RS_TEMPLATE: &str = r#"//! Captures this build's git identity for the rsupd updater (newer-build
@@ -747,6 +748,15 @@ fn main() {
     let build_unix = git(&["log", "-1", "--format=%ct", "HEAD"]).unwrap_or_default();
     println!("cargo:rustc-env=RSUPD_GIT_TAG={git_tag}");
     println!("cargo:rustc-env=RSUPD_BUILD_UNIX={build_unix}");
+
+    // The branch this build came from is the release channel: `master` (or empty,
+    // outside a repo / detached at a tag) means the default channel, anything else
+    // (e.g. `beta`) tracks that channel and folds into the reported version. This
+    // is the same branch `rsupd publish` reads, so consumer and manifest agree.
+    let channel = git(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .filter(|b| b != "HEAD")
+        .unwrap_or_default();
+    println!("cargo:rustc-env=RSUPD_CHANNEL={channel}");
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=.git/HEAD");

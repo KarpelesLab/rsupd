@@ -298,10 +298,14 @@ impl UpdaterBuilder {
         } else {
             self.channel
         };
+        // Fold the channel into our own version exactly as the producer stamped
+        // it into the manifest (1.0.0 -> 1.0.0-beta off master), so same-version
+        // comparisons line up and the date_tag tiebreak still fires per channel.
+        let cur_version = crate::version_with_channel(&self.cur_version, &channel);
         Ok(Updater {
             project: self.project,
             channel,
-            cur_version: self.cur_version,
+            cur_version,
             cur_date_tag: self.cur_date_tag,
             cur_git_tag: self.cur_git_tag,
             fingerprint,

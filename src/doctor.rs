@@ -339,14 +339,17 @@ fn guidance(report: &DoctorReport) -> String {
          \x20    fn rsupd_updater() -> rsupd::Result<rsupd::Updater> {{\n\
          \x20        rsupd::Updater::builder(env!(\"CARGO_PKG_NAME\"), env!(\"CARGO_PKG_VERSION\"))\n\
          \x20            .fingerprint_hex(\"{fp_hex}\")\n\
-         \x20            // Optional: detect newer builds of the SAME version (needs build.rs).\n\
+         \x20            // Track the channel + build identity captured by build.rs.\n\
+         \x20            .channel(env!(\"RSUPD_CHANNEL\"))\n\
          \x20            .git_tag(env!(\"RSUPD_GIT_TAG\"))\n\
          \x20            .date_tag(rsupd::date_tag_from_unix(env!(\"RSUPD_BUILD_UNIX\")))\n\
          \x20            .build() // fetches from the default dist-go host\n\
          \x20    }}\n\n\
-         \x20  Channel defaults to \"master\" (matching `rsupd publish` with no --channel).\n\
-         \x20  The RSUPD_GIT_TAG / RSUPD_BUILD_UNIX env vars come from a build.rs —\n\
-         \x20  run `rsupd publish --setup-ci` to create it.\n\n"
+         \x20  The channel is the git branch at build time: empty/detached or\n\
+         \x20  `master` means the default channel, `beta` tracks the beta channel\n\
+         \x20  (and reports 1.0.0-beta) — matching `rsupd publish` on that branch.\n\
+         \x20  The RSUPD_CHANNEL / RSUPD_GIT_TAG / RSUPD_BUILD_UNIX env vars come\n\
+         \x20  from a build.rs — run `rsupd publish --setup-ci` to create it.\n\n"
     ));
 
     g.push_str(
