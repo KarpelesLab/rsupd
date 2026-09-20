@@ -32,14 +32,14 @@ default = []
 _cli = ["dep:klbfw", "dep:serde_json"]
 
 [dependencies]
-bottlers = "0.1.1"
-purecrypto = "0.6.20"
+bottlers = "0.1.4"
+purecrypto = "0.9"
 compcol = { version = "0.6.3", default-features = false, features = ["std", "zstd"] }
 ciborium = "0.2"
-rsurl = "0.1"
+rsurl = "0.1.15"
 base64 = "0.21"
 zeroize = "1"
-klbfw = { version = "0.1.1", optional = true }
+klbfw = { version = "0.1.5", optional = true }
 serde_json = { version = "1.0", optional = true }
 
 [dev-dependencies]

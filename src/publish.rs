@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use klbfw::{RestContext, RestError};
+use klbfw::{Client, RestError};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -48,7 +48,7 @@ pub const UPLOAD_ENDPOINT: &str = "Cloud/Rust:upload";
 /// complete package zip ([`crate::package::BuiltPackage::bytes`]). When `verbose`
 /// is set, klbfw traces each REST request (method, path, status) to stderr.
 pub fn upload_package(filename: &str, bytes: Vec<u8>, verbose: bool) -> Result<Value> {
-    let ctx = RestContext::new().with_debug(verbose);
+    let ctx = Client::new().with_debug(verbose);
 
     let mut params: HashMap<String, Value> = HashMap::new();
     params.insert("filename".into(), Value::String(filename.to_string()));

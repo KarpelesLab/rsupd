@@ -30,6 +30,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -37,9 +43,9 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "bottlers"
-version = "0.1.1"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37525c19a3febf109ed95c33af5c5bcd8f756e5bb69d4804449e7feb90185269"
+checksum = "5a4e326df2264f0be0f104aa5604a0902e1035761d062568c82f02fc7af8afd8"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -125,15 +131,9 @@ dependencies = [
 
 [[package]]
 name = "compcol"
-version = "0.4.7"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e65b9ac28430d193e8cc280c5a814c5c9a5b820c57ad8611f348d46e2550554f"
-
-[[package]]
-name = "compcol"
-version = "0.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28976e9ad837e95f5ce78377e5f79a43dbce97acb2bf8d1f6dd00ff152815603"
+checksum = "f6f29da98742f258743e8bb44b09f0cc1cbca2591e709b1bb85ccd6e9111f431"
 
 [[package]]
 name = "core-foundation-sys"
@@ -176,6 +176,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "futures-channel"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
+dependencies = [
+ "futures-core",
 ]
 
 [[package]]
@@ -250,15 +259,9 @@ dependencies = [
 
 [[package]]
 name = "intl"
-version = "0.4.1"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5bfae726bb3f672d4f4b1f29cee6c74898a35230a4c794d8292c21129107f21"
-
-[[package]]
-name = "intl"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a10e93eaa323ffd2a8bde0bf616e738e0e708cf193af508a14fe1a126603e35"
+checksum = "6d12cb9b38f519179377fb415820ce965b4778be1e77a06d136c6339a4683c9b"
 
 [[package]]
 name = "itoa"
@@ -279,14 +282,14 @@ dependencies = [
 
 [[package]]
 name = "klbfw"
-version = "0.1.1"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6516247c320d22a209f7433996a26a38fb84414fb44ea4519e095372b56262c"
+checksum = "70d93d678e5d47414d3b73e6c9e00f2cad3fe64ac15c9d29b68b9732da8e059c"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.23.1",
  "chrono",
  "form_urlencoded",
- "intl 0.5.0",
+ "intl",
  "purecrypto",
  "quick-xml",
  "rsurl",
@@ -323,9 +326,9 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "nix"
-version = "0.30.1"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -377,21 +380,21 @@ checksum = "4c59c57a55625b2bbaffeaeeee0e4d870139236a8090bd32d32156051b21a2f8"
 
 [[package]]
 name = "purecrypto"
-version = "0.6.20"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1195836298100c210d42f26ce46a5b3ec520c51eb3acd00397e27bdf4faa0f5b"
+checksum = "f59c301760fc52960fd32d5d697126f04bca123ed105b1b1db696708375c002f"
 dependencies = [
  "cacrt",
- "compcol 0.4.7",
+ "compcol",
 ]
 
 [[package]]
 name = "puressh"
-version = "0.0.6"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72da1a53865f9f7058158317730f769e48d8195594f4c94d89c2487a9b805d06"
+checksum = "204823e8a96d5220dde0feefb0bfe941d8834443eddc1ac63fbc4abffd22c34a"
 dependencies = [
- "compcol 0.4.7",
+ "compcol",
  "libc",
  "nix",
  "purecrypto",
@@ -400,9 +403,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.31.0"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
  "memchr",
  "serde",
@@ -430,7 +433,7 @@ dependencies = [
  "base64 0.21.7",
  "bottlers",
  "ciborium",
- "compcol 0.6.7",
+ "compcol",
  "klbfw",
  "purecrypto",
  "rsurl",
@@ -440,15 +443,21 @@ dependencies = [
 
 [[package]]
 name = "rsurl"
-version = "0.1.3"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4e96dce8dc42f5c811d9aecaf6d32ce5fca9f339390d967c86c1012c7d5afab"
+checksum = "c7278237c64d9fe4c79bb9b68128b6500d1cc8b397d87fabb06e1f7b58cc1963"
 dependencies = [
- "compcol 0.6.7",
- "intl 0.4.1",
+ "compcol",
+ "futures-channel",
+ "futures-util",
+ "intl",
+ "js-sys",
  "psl2",
  "purecrypto",
  "puressh",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "zeroize",
 ]
 
@@ -498,7 +507,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -538,6 +547,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "syn"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -552,22 +572,22 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.69"
+version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.69"
+version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -601,6 +621,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62df1340f32221cb9c54d6a27b030e3dba64361d4a95bed55f9aacb44da291d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen-macro"
 version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -619,7 +649,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
  "wasm-bindgen-shared",
 ]
 
@@ -630,6 +660,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8622dcb61c0bcc9fffa6938bed81210af2da9a7e4a1a834b2e37a59b6dfb6141"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -653,7 +693,7 @@ checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -664,7 +704,7 @@ checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -717,7 +757,7 @@ checksum = "1ae7f38b72ec2a254e2b87ef277cf2cd4fb97cbebf944faa6f33354da0867930"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -737,7 +777,7 @@ checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]

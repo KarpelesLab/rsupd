@@ -54,8 +54,9 @@ impl Identity {
         let enc_key = PrivateKey::X25519(X25519PrivateKey::generate(&mut OsRng));
 
         // IDCard::new lists the signing key as the self key with purpose "sign".
-        let mut idcard = IDCard::new(&sign_key)?;
-        idcard.set_key_purposes(enc_key.public_pkix()?, &["decrypt"]);
+        let now = now_unix();
+        let mut idcard = IDCard::new(&sign_key, now)?;
+        idcard.set_key_purposes(enc_key.public_pkix()?, &["decrypt"], now);
         // Self-sign the (now two-key) card with the signing key.
         let signed_idcard = idcard.sign(&sign_key)?;
 
