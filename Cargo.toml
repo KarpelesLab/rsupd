@@ -37,7 +37,7 @@ purecrypto = "0.9"
 compcol = { version = "0.6.3", default-features = false, features = ["std", "zstd"] }
 ciborium = "0.2"
 rsurl = "0.1.15"
-base64 = "0.21"
+base64 = "0.23"
 zeroize = "1"
 klbfw = { version = "0.1.5", optional = true }
 serde_json = { version = "1.0", optional = true }
