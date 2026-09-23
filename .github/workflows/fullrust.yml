@@ -33,4 +33,6 @@ jobs:
           # would be recorded as `[[patch.unused]]`, which `--locked` rejects.
           no-ecosystem: true
           command: test
-          args: --release --locked
+          # `--tests`: unit + integration tests, no doctests — the image ships no
+          # `rustdoc`, and the doctests are target-independent anyway.
+          args: --release --locked --tests
