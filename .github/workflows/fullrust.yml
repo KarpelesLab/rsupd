@@ -29,5 +29,8 @@ jobs:
         uses: KarpelesLab/fullrust@master
         with:
           image: ghcr.io/karpeleslab/fullrust:1.95
+          # Nothing here uses getrandom/socket2, and the image's patch for them
+          # would be recorded as `[[patch.unused]]`, which `--locked` rejects.
+          no-ecosystem: true
           command: test
           args: --release --locked
