@@ -1,7 +1,8 @@
 //! Resolution of the per-project configuration directory.
 //!
 //! Identities live at `<config>/rsupd/<project>/`, where `<config>` follows the
-//! platform convention: `$XDG_CONFIG_HOME` (or `~/.config`) on Unix, `%APPDATA%`
+//! platform convention: `$XDG_CONFIG_HOME` (or `~/.config`) on Unix and
+//! `fullrust` (libc-free Linux, not in the `unix` family), `%APPDATA%`
 //! on Windows, and `~/Library/Application Support` on macOS. The resolver is
 //! deliberately dependency-free.
 
@@ -75,7 +76,7 @@ fn platform_config_dir() -> Result<PathBuf> {
         .ok_or_else(|| Error::Other("cannot determine $HOME".into()))
 }
 
-#[cfg(all(unix, not(target_vendor = "apple")))]
+#[cfg(any(all(unix, not(target_vendor = "apple")), target_os = "fullrust"))]
 fn platform_config_dir() -> Result<PathBuf> {
     if let Some(p) = env_path("XDG_CONFIG_HOME") {
         return Ok(p);

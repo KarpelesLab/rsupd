@@ -75,9 +75,11 @@ pub fn install_bytes(target: &Path, data: &[u8]) -> Result<()> {
     let new_path = dir.join(format!(".{name}.new"));
     let old_path = dir.join(format!(".{name}.old"));
 
-    write_executable(&new_path, data).inspect_err(|_| {
-        let _ = std::fs::remove_file(&new_path);
-    })?;
+    write_executable(&new_path, data)
+        .and_then(|()| match_exec_mode(&target, &new_path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&new_path);
+        })?;
 
     let had_old = target.exists();
     if had_old {
@@ -143,6 +145,28 @@ fn write_executable(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Gives the freshly written `new` file the executable mode of `target`.
+///
+/// `fullrust` (libc-free Linux, not in the `unix` family) has no
+/// `PermissionsExt`, so the file is created `0o666 & !umask` — not executable —
+/// and 0o755 cannot be spelled out. Copying an existing mode is the only way to
+/// set one: take it from the binary being replaced or, on a fresh install, from
+/// the running executable.
+#[cfg(target_os = "fullrust")]
+fn match_exec_mode(target: &Path, new: &Path) -> Result<()> {
+    let perms = std::fs::metadata(target)
+        .or_else(|_| std::fs::metadata(std::env::current_exe()?))?
+        .permissions();
+    std::fs::set_permissions(new, perms)?;
+    Ok(())
+}
+
+/// Elsewhere `write_executable` already set the mode (or there is none).
+#[cfg(not(target_os = "fullrust"))]
+fn match_exec_mode(_target: &Path, _new: &Path) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn write_executable(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
@@ -156,4 +180,37 @@ fn write_executable(path: &Path, data: &[u8]) -> Result<()> {
     f.write_all(data)?;
     f.sync_all()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_replaces_and_keeps_it_executable() {
+        let dir = std::env::temp_dir().join(format!("rsupd-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app");
+        // A copy of the running test binary stands in for the installed one, so
+        // it carries a real executable mode on every platform.
+        std::fs::copy(std::env::current_exe().unwrap(), &target).unwrap();
+        let before = std::fs::metadata(&target).unwrap().permissions();
+
+        install_bytes(&target, b"new binary").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new binary");
+        let after = std::fs::metadata(&target).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(after.mode() & 0o777, 0o755);
+        }
+        #[cfg(target_os = "fullrust")]
+        assert_eq!(after, before);
+        let _ = (before, after);
+        let (new, old) = sidecar_paths(&target).unwrap();
+        assert!(!new.exists() && !old.exists(), "sidecars left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

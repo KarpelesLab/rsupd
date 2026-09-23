@@ -2,9 +2,9 @@
 //!
 //! Mirrors goupd: re-exec the (now replaced) executable with the same arguments,
 //! setting `RSUPD_DELAY=1` so the fresh process pauses briefly before starting —
-//! giving the parent time to exit and release resources. On Unix this is an
-//! `exec` that never returns on success; on Windows a new process is spawned and
-//! the current one exits.
+//! giving the parent time to exit and release resources. On Unix and `fullrust`
+//! this is an `exec` that never returns on success (and keeps the PID); on
+//! Windows a new process is spawned and the current one exits.
 
 use std::path::Path;
 
@@ -29,8 +29,14 @@ pub fn honor_startup_delay() {
 }
 
 /// Re-executes `self_exe` with the current process arguments.
-#[cfg(unix)]
+///
+/// `fullrust` (libc-free Linux, not in the `unix` family) carries the same
+/// `CommandExt` under `std::os::fullrust`.
+#[cfg(any(unix, target_os = "fullrust"))]
 pub fn restart(self_exe: &Path) -> Result<()> {
+    #[cfg(target_os = "fullrust")]
+    use std::os::fullrust::process::CommandExt;
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt;
     let err = std::process::Command::new(self_exe)
         .args(std::env::args_os().skip(1))
@@ -50,7 +56,7 @@ pub fn restart(self_exe: &Path) -> Result<()> {
     std::process::exit(0);
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "fullrust")))]
 pub fn restart(_self_exe: &Path) -> Result<()> {
     Err(crate::error::Error::Other(
         "restart not supported on this platform".into(),

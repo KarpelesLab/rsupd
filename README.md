@@ -311,6 +311,14 @@ The minimal integration is in [Getting started](#getting-started) above. A few d
   back to `darwin_universal` on macOS.
 - Call `rsupd::honor_startup_delay()` early in `main()` so a process that was just restarted by an
   update settles briefly before doing work.
+- **libc-free static Linux ([fullrust](https://github.com/KarpelesLab/fullrust)):** the updater
+  builds for `x86_64-unknown-linux-fullrust` unchanged. That target is not in the `unix` family;
+  the one visible difference from Linux-gnu is that the installed binary takes its mode from the
+  one it replaces (fullrust's std can't set `0o755` directly). Restart `exec`s in place as on Unix,
+  which needs a fullrust toolchain with `std::os::fullrust::process`. Its `os_arch` label is
+  `linux_amd64`, the same as a gnu
+  build, so a fullrust program only receives fullrust builds when the release uses
+  per-triple naming.
 
 ### Transports
 

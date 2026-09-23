@@ -1,0 +1,33 @@
+name: fullrust
+
+# The updater library on `x86_64-unknown-linux-fullrust`: a patched toolchain
+# whose std talks to the kernel through raw syscalls instead of libc. The target
+# is deliberately NOT in the `unix` family, so `cfg(unix)` and `cfg(windows)` are
+# both false there — the `target_os = "fullrust"` arms (config dir, exec mode on
+# install, restart) only compile and run in this job.
+#
+# The image tracks this crate's `rust-version`; fullrust publishes one image per
+# Rust minor.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lib:
+    name: updater lib (libc-free static Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Test (release)
+        uses: KarpelesLab/fullrust@master
+        with:
+          image: ghcr.io/karpeleslab/fullrust:1.95
+          command: test
+          args: --release --locked
