@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/KarpelesLab/rsupd/compare/v0.3.5...v0.3.6) - 2026-10-24
+
+### Other
+
+- update bottlers 0.1.5, purecrypto 0.10, compcol 0.7, rsurl 0.1.21, klbfw 0.1.8
+
 ## [0.3.5](https://github.com/KarpelesLab/rsupd/compare/v0.3.4...v0.3.5) - 2026-09-23
 
 ### Other
