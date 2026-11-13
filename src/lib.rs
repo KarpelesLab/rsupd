@@ -25,13 +25,23 @@
 //! [`update::ZipPackageTransport`] reads packages produced by this same crate so
 //! the whole flow can be exercised without a server.
 //!
+//! # Updating from GitHub Releases
+//!
+//! Open source projects can skip the signed distribution altogether: with the
+//! **`github`** feature enabled, `.github("owner/repo")` makes the updater
+//! follow the repository's GitHub Releases (uploaded by `rsupd publish
+//! --github`). That mode has no identity, fingerprint or manifest — a download
+//! is checked against the SHA-256 digest the GitHub API reports for the release
+//! asset, so trust rests on GitHub rather than on a signing key.
+//!
 //! # Features
 //!
 //! The default build is the **consumer** updater only — a small surface
 //! ([`Updater`], [`Transport`], [`HttpTransport`], [`Available`], plus
 //! [`Error`]/[`Result`]). The **producer** half (building, signing, packaging,
 //! publishing, the doctor, and the `rsupd` binary) is behind the non-default
-//! **`_cli`** feature.
+//! **`_cli`** feature, and the unsigned GitHub Releases mode behind the
+//! non-default **`github`** feature (which pulls in `serde_json`).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

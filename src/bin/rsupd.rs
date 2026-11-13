@@ -8,6 +8,7 @@
 //! rsupd build      [--project-dir DIR] [--channel C] [--target T]... [--bin B]...
 //!                  [--naming os_arch|triple] [--no-compress] [-o OUT.zip]
 //! rsupd publish    [<build flags>...] [-y] [--ci [--run ID] [--repo R] [--commit SHA]]
+//!                  [--github [--repo R] [--tag TAG]]
 //! rsupd version
 //! rsupd update     [--channel C]
 //! rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
@@ -141,17 +142,7 @@ fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBu
     // Prefers the RSUPD_IDENTITY env var (CI secret) over the on-disk identity.
     let identity = Identity::load_env_or_file(&project, password.as_deref())?;
 
-    let mut build = BuildOptions::new(project_dir);
-    build.channel = opts.channel.clone().unwrap_or_default();
-    build.targets = opts.targets.clone();
-    build.bins = opts.bins.clone();
-    if let Some(naming) = &opts.naming {
-        build.naming = rsupd::TargetNaming::parse(naming)?;
-    }
-    if opts.no_compress {
-        build.compression = "none".to_string();
-    }
-
+    let build = build_options(opts, project_dir)?;
     let built = package::build_package(&identity, &build)?;
     let out = opts.output.clone().unwrap_or_else(|| {
         PathBuf::from(format!(
@@ -181,6 +172,21 @@ fn build_and_write(opts: &Flags) -> rsupd::Result<(package::BuiltPackage, PathBu
         );
     }
     Ok((built, out))
+}
+
+/// The package build options described by the command-line flags.
+fn build_options(opts: &Flags, project_dir: PathBuf) -> rsupd::Result<BuildOptions> {
+    let mut build = BuildOptions::new(project_dir);
+    build.channel = opts.channel.clone().unwrap_or_default();
+    build.targets = opts.targets.clone();
+    build.bins = opts.bins.clone();
+    if let Some(naming) = &opts.naming {
+        build.naming = rsupd::TargetNaming::parse(naming)?;
+    }
+    if opts.no_compress {
+        build.compression = "none".to_string();
+    }
+    Ok(build)
 }
 
 fn run_publish(args: &[String]) -> rsupd::Result<()> {
@@ -216,6 +222,16 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
         opts.targets = staged;
     }
 
+    // --github: attach the binaries to the repo's GitHub Releases instead of
+    // signing a package and uploading it to the rsupd host.
+    if opts.github {
+        let project_dir = opts
+            .project_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+        return publish_github(&project_dir, &opts);
+    }
+
     let (built, out) = build_and_write(&opts)?;
 
     let filename = out
@@ -244,6 +260,175 @@ fn run_publish(args: &[String]) -> rsupd::Result<()> {
     Ok(())
 }
 
+/// Publishes the project's binaries to the GitHub Releases of its repository
+/// via `gh`, for programs that update with the updater's `.github(..)` mode:
+/// one `<bin>_<target>.zst` asset per target on the release tagged `--tag`
+/// (default `v<version>`).
+///
+/// Nothing is signed and no identity is needed — the updater checks each
+/// download against the digest GitHub computes for the asset. A non-default
+/// channel's release is made a pre-release, so it never becomes the "latest
+/// release" default-channel updaters follow.
+fn publish_github(project_dir: &Path, opts: &Flags) -> rsupd::Result<()> {
+    let built = package::build_artifacts(&build_options(opts, project_dir.to_path_buf())?)?;
+    println!("built release:");
+    println!("  project:  {}", built.project);
+    println!("  version:  {}", built.version);
+    println!("  channel:  {:?}", built.channel);
+    for a in &built.artifacts {
+        println!(
+            "  asset:    {} ({}, {} -> {} bytes)",
+            a.filename, a.compression, a.raw_size, a.size
+        );
+    }
+
+    let repo = match &opts.repo {
+        Some(r) => r.clone(),
+        None => run_cmd_in(
+            project_dir,
+            "gh",
+            &[
+                "repo",
+                "view",
+                "--json",
+                "nameWithOwner",
+                "-q",
+                ".nameWithOwner",
+            ],
+        )?,
+    };
+    let tag = opts
+        .tag
+        .clone()
+        .unwrap_or_else(|| rsupd::publish::github_release_tag(&built.version));
+    if !is_safe_name(&tag) {
+        return Err(err(format!(
+            "invalid release tag {tag:?}: only ASCII letters, digits, '.', '_', '-' allowed"
+        )));
+    }
+    let default_channel = built.channel == rsupd::DEFAULT_CHANNEL;
+
+    println!();
+    println!(
+        "About to attach {} asset(s) to {}release {tag} of {repo}",
+        built.artifacts.len(),
+        if default_channel { "" } else { "pre-" }
+    );
+    if !opts.assume_yes && !confirm("Publish this release to GitHub? [y/N] ")? {
+        println!("aborted; nothing was uploaded");
+        return Ok(());
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("rsupd-gh-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&tmp)?;
+    let result = (|| {
+        let assets = rsupd::publish::stage_github_assets(&built, &tmp)?;
+        let head = run_cmd_in(project_dir, "git", &["rev-parse", "HEAD"]).ok();
+        ensure_github_release(
+            project_dir,
+            &repo,
+            &tag,
+            !default_channel,
+            &format!("{} {}", built.project, built.version),
+            head.as_deref(),
+        )?;
+        gh_release_upload(project_dir, &repo, &tag, &assets)
+    })();
+    std::fs::remove_dir_all(&tmp).ok();
+    result?;
+    println!(
+        "published {} {} to https://github.com/{repo}/releases/tag/{tag}",
+        built.project, built.version
+    );
+    Ok(())
+}
+
+/// Makes sure release `tag` exists on `repo` with the right pre-release state,
+/// creating it (at `target`, when the git tag does not exist yet) if needed.
+///
+/// A non-default channel's releases must be pre-releases so they never become
+/// GitHub's "latest release" — the pointer default-channel updaters follow.
+fn ensure_github_release(
+    dir: &Path,
+    repo: &str,
+    tag: &str,
+    prerelease: bool,
+    title: &str,
+    target: Option<&str>,
+) -> rsupd::Result<()> {
+    let state = run_cmd_in(
+        dir,
+        "gh",
+        &[
+            "release",
+            "view",
+            tag,
+            "-R",
+            repo,
+            "--json",
+            "isPrerelease,isDraft",
+            "-q",
+            r#""\(.isPrerelease) \(.isDraft)""#,
+        ],
+    );
+    let Ok(state) = state else {
+        // No such release (or `gh` can't reach it — the create below then
+        // reports the real cause).
+        let mut args = vec![
+            "release",
+            "create",
+            tag,
+            "-R",
+            repo,
+            "--title",
+            title,
+            "--notes",
+            "Binaries for the rsupd auto-updater.",
+        ];
+        if prerelease {
+            args.push("--prerelease");
+        }
+        if let Some(t) = target {
+            args.extend(["--target", t]);
+        }
+        run_cmd_in(dir, "gh", &args)?;
+        println!("github: created release {tag}");
+        return Ok(());
+    };
+    let (is_pre, is_draft) = state.split_once(' ').unwrap_or((state.as_str(), ""));
+    if prerelease && is_pre != "true" {
+        run_cmd_in(
+            dir,
+            "gh",
+            &["release", "edit", tag, "-R", repo, "--prerelease"],
+        )?;
+        println!("github: marked release {tag} as a pre-release (non-default channel)");
+    } else if !prerelease && (is_pre == "true" || is_draft == "true") {
+        eprintln!(
+            "warning: release {tag} is a draft or pre-release; updaters only see it once it \
+             is published as the repository's latest release"
+        );
+    }
+    Ok(())
+}
+
+/// `gh release upload --clobber`: attaches `files` to release `tag`, replacing
+/// same-named assets.
+fn gh_release_upload(dir: &Path, repo: &str, tag: &str, files: &[PathBuf]) -> rsupd::Result<()> {
+    let files: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let mut args = vec!["release", "upload", tag, "-R", repo, "--clobber"];
+    args.extend(files.iter().map(String::as_str));
+    run_cmd_in(dir, "gh", &args)?;
+    Ok(())
+}
+
 /// Which CI provider's artifacts to pull from.
 #[derive(Clone, Copy)]
 enum CiProvider {
@@ -265,13 +450,17 @@ fn run_setup_ci(project_dir: &Path, opts: &Flags) -> rsupd::Result<()> {
     // build.rs captures the build identity the updater needs (provider-agnostic).
     setup_build_rs(project_dir)?;
     match provider {
-        CiProvider::GitHub => setup_github_ci(project_dir, &bins, opts.full)?,
+        CiProvider::GitHub => setup_github_ci(project_dir, &bins, opts.full, opts.github)?,
         CiProvider::GitLab => setup_gitlab_ci(project_dir, &bins, opts.full)?,
     }
 
+    if opts.github && !matches!(provider, CiProvider::GitHub) {
+        return Err(err("--github needs the GitHub CI provider"));
+    }
+
     // --full: also upload the signing identity as a CI secret so the publish job
-    // can sign releases unattended.
-    if opts.full {
+    // can sign releases unattended. GitHub Releases are unsigned: no identity.
+    if opts.full && !opts.github {
         upload_identity_secret(project_dir, &project, provider, opts.assume_yes)?;
     }
     Ok(())
@@ -360,7 +549,12 @@ fn setup_build_rs(project_dir: &Path) -> rsupd::Result<()> {
 
 /// Writes `.github/workflows/build.yml` (a dedicated file we own). When `full`,
 /// appends a tag-gated `publish` job that signs and uploads the release.
-fn setup_github_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Result<()> {
+fn setup_github_ci(
+    project_dir: &Path,
+    bins: &[String],
+    full: bool,
+    github: bool,
+) -> rsupd::Result<()> {
     validate_bin_names(bins)?;
     let mut paths = String::new();
     for b in bins {
@@ -376,7 +570,11 @@ fn setup_github_ci(project_dir: &Path, bins: &[String], full: bool) -> rsupd::Re
         .replace("__BINS__", &bins.join(" "));
     if full {
         content.push('\n');
-        content.push_str(GITHUB_PUBLISH_JOB);
+        content.push_str(if github {
+            GITHUB_RELEASES_PUBLISH_JOB
+        } else {
+            GITHUB_PUBLISH_JOB
+        });
     }
 
     let dir = project_dir.join(".github").join("workflows");
@@ -805,6 +1003,35 @@ const GITHUB_PUBLISH_JOB: &str = r#"  # Build, sign and upload the release. Runs
           GH_TOKEN: ${{ github.token }}
           RSUPD_IDENTITY: ${{ secrets.RSUPD_IDENTITY }}
         run: rsupd publish --ci --run ${{ github.run_id }} --yes
+"#;
+
+/// Tag-gated `publish` job appended by `--setup-ci --full --github`: attaches the
+/// binaries to the repository's own GitHub Release. Unsigned, so it needs no
+/// identity secret — only a token allowed to write releases.
+const GITHUB_RELEASES_PUBLISH_JOB: &str = r#"  # Attach the binaries to this tag's GitHub Release, where programs built with
+  # the rsupd updater's `.github(..)` mode find them. Runs only on tags.
+  publish:
+    name: publish
+    needs: [build, macos-universal]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install rsupd
+        run: cargo install rsupd --locked --features _cli
+
+      - name: Upload to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: rsupd publish --ci --github --run ${{ github.run_id }} --tag "${{ github.ref_name }}" --yes
 "#;
 
 /// GitLab `publish` job (tags only) inserted into the managed block by
@@ -1265,6 +1492,8 @@ struct Flags {
     run_id: Option<String>,
     repo: Option<String>,
     commit: Option<String>,
+    github: bool,
+    tag: Option<String>,
     positional: Vec<String>,
 }
 
@@ -1298,6 +1527,8 @@ impl Flags {
                 "--run" => f.run_id = Some(take()),
                 "--repo" => f.repo = Some(take()),
                 "--commit" => f.commit = Some(take()),
+                "--github" => f.github = true,
+                "--tag" => f.tag = Some(take()),
                 other => f.positional.push(other.to_string()),
             }
             i += 1;
@@ -1350,7 +1581,8 @@ USAGE:
   rsupd publish    [<build flags>...] [-y] [-v]
                    [--ci [--provider github|gitlab] [--run ID]
                          [--repo OWNER/REPO] [--commit SHA|REF]]
-                   [--setup-ci [--full] [--provider github|gitlab]]
+                   [--github [--repo OWNER/REPO] [--tag TAG]]
+                   [--setup-ci [--full] [--github] [--provider github|gitlab]]
   rsupd version
   rsupd update     [--channel C]
   rsupd inspect    PACKAGE.zip [--fingerprint HEX | --project N]
@@ -1366,10 +1598,18 @@ CI config file (.github/workflows or .gitlab-ci.yml) and uses `gh` (GitHub) or
 `glab` (GitLab); override with --provider. By default the newest successful run
 for HEAD that has artifacts is used.
 
+With `--github`, nothing is signed or sent to the rsupd host: the binaries are
+attached (using `gh`) to the GitHub release tagged --tag (default v<version>)
+of --repo (default: the current repository), for programs that update with the
+updater's `.github(..)` mode. No identity is needed; the updater checks each
+download against the SHA-256 digest GitHub reports for it.
+
 `--setup-ci` instead creates/edits that build config (a GitHub Actions
 workflow or .gitlab-ci.yml) plus a build.rs, then exits. Add `--full` to also
 upload the signing identity as the RSUPD_IDENTITY secret and add a tag-gated
-job that builds, signs and uploads the release with rsupd."
+job that builds, signs and uploads the release with rsupd. With `--full
+--github` that job uploads to GitHub Releases instead, and no identity is
+involved."
     );
 }
 

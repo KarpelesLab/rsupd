@@ -22,6 +22,9 @@ const WIRE_MARKERS: &[&str] = &[
     "rsupd::Updater",
 ];
 
+/// Source marker of the updater's unsigned GitHub mode (`.github("owner/repo")`).
+const GITHUB_MARKER: &str = ".github(";
+
 /// Whether (and how correctly) the project fingerprint is embedded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FingerprintState {
@@ -32,6 +35,9 @@ pub enum FingerprintState {
     NotFound,
     /// No identity exists to compare against (run `rsupd id init` first).
     Unknown,
+    /// The updater runs in GitHub mode (`.github(..)`), which is unsigned and
+    /// embeds no fingerprint.
+    NotNeeded,
 }
 
 /// Per-binary wiring result.
@@ -70,7 +76,10 @@ impl DoctorReport {
     pub fn ok(&self) -> bool {
         !self.bins.is_empty()
             && self.bins.iter().all(|b| b.wired)
-            && self.fingerprint == FingerprintState::Matches
+            && matches!(
+                self.fingerprint,
+                FingerprintState::Matches | FingerprintState::NotNeeded
+            )
     }
 }
 
@@ -159,17 +168,21 @@ fn fingerprint_state(
     fingerprint: Option<&[u8; 32]>,
     corpus: &[(PathBuf, String)],
 ) -> FingerprintState {
-    let Some(fp) = fingerprint else {
-        return FingerprintState::Unknown;
-    };
-    let want_hex = hex(fp);
-    if corpus
-        .iter()
-        .any(|(_, t)| t.to_lowercase().contains(&want_hex))
-    {
+    let embedded = fingerprint.is_some_and(|fp| {
+        let want_hex = hex(fp);
+        corpus
+            .iter()
+            .any(|(_, t)| t.to_lowercase().contains(&want_hex))
+    });
+    if embedded {
         FingerprintState::Matches
-    } else {
+    } else if corpus.iter().any(|(_, t)| t.contains(GITHUB_MARKER)) {
+        // Updating from GitHub Releases: nothing to embed.
+        FingerprintState::NotNeeded
+    } else if fingerprint.is_some() {
         FingerprintState::NotFound
+    } else {
+        FingerprintState::Unknown
     }
 }
 
@@ -241,6 +254,7 @@ impl DoctorReport {
         ));
         match &self.fingerprint_hex {
             Some(h) => s.push_str(&format!("  fingerprint: {h}\n")),
+            None if self.fingerprint == FingerprintState::NotNeeded => {}
             None => s.push_str("  fingerprint: (no identity — run `rsupd id init`)\n"),
         }
         s.push_str(&format!(
@@ -249,6 +263,7 @@ impl DoctorReport {
                 FingerprintState::Matches => "ok",
                 FingerprintState::NotFound => "MISSING",
                 FingerprintState::Unknown => "unknown (no identity)",
+                FingerprintState::NotNeeded => "not needed (updates from GitHub Releases)",
             }
         ));
 
@@ -351,6 +366,14 @@ fn guidance(report: &DoctorReport) -> String {
          \x20  The RSUPD_CHANNEL / RSUPD_GIT_TAG / RSUPD_BUILD_UNIX env vars come\n\
          \x20  from a build.rs — run `rsupd publish --setup-ci` to create it.\n\n"
     ));
+
+    g.push_str(
+        "   Open source on GitHub? You can skip the identity and fingerprint: replace\n\
+         \x20  the `.fingerprint_hex(..)` line with `.github(\"owner/repo\")` (rsupd's\n\
+         \x20  `github` feature) and publish\n\
+         \x20  with `rsupd publish --github`. Updates are then unsigned and checked\n\
+         \x20  against the SHA-256 digest GitHub reports for each release asset.\n\n",
+    );
 
     g.push_str(
         "3a. SHORT-RUNNING command — add a `--update` flag that self-updates and exits:\n\n\

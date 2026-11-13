@@ -1,5 +1,7 @@
 //! Consumer side: check for, verify, and apply updates to the running program.
 
+#[cfg(feature = "github")]
+pub(crate) mod github;
 pub mod hide;
 pub mod install;
 pub mod restart;
@@ -20,20 +22,52 @@ pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// A verified, newer release discovered by [`Updater::check`].
 pub struct Available {
-    /// The verified manifest describing the new release (kept private so the
-    /// manifest type stays out of the consumer's public surface).
-    manifest: Manifest,
+    /// What was found (kept private so the manifest type stays out of the
+    /// consumer's public surface).
+    release: Release,
+}
+
+/// A newer release, by where it came from.
+enum Release {
+    /// A verified signed manifest.
+    Signed(Manifest),
+    /// A GitHub release asset (the `github` feature's `UpdaterBuilder::github`).
+    #[cfg(feature = "github")]
+    Github(github::GithubRelease),
 }
 
 impl Available {
     /// The new version string.
     pub fn version(&self) -> &str {
-        &self.manifest.version
+        match &self.release {
+            Release::Signed(m) => &m.version,
+            #[cfg(feature = "github")]
+            Release::Github(r) => &r.version,
+        }
     }
-    /// The new build identity (git short tag).
+    /// The new build identity (git short tag). Empty for a release found on
+    /// GitHub, which carries none.
     pub fn git_tag(&self) -> &str {
-        &self.manifest.git_tag
+        match &self.release {
+            Release::Signed(m) => &m.git_tag,
+            #[cfg(feature = "github")]
+            Release::Github(_) => "",
+        }
     }
+}
+
+/// Where an [`Updater`] gets its releases, and with them how it trusts them.
+enum Source {
+    /// A signed manifest from a [`Transport`], verified against the project
+    /// fingerprint.
+    Signed {
+        fingerprint: Vec<u8>,
+        transport: Box<dyn Transport>,
+    },
+    /// The project's GitHub Releases, verified against the asset digest the
+    /// GitHub API reports.
+    #[cfg(feature = "github")]
+    Github(github::GithubSource),
 }
 
 /// Drives update checks and installation for one project/channel against a
@@ -44,8 +78,7 @@ pub struct Updater {
     cur_version: String,
     cur_date_tag: String,
     cur_git_tag: String,
-    fingerprint: Vec<u8>,
-    transport: Box<dyn Transport>,
+    source: Source,
     auto_restart: bool,
 }
 
@@ -63,8 +96,10 @@ impl Updater {
             cur_date_tag: String::new(),
             cur_git_tag: String::new(),
             fingerprint: None,
-            fingerprint_err: None,
+            build_err: None,
             transport: None,
+            #[cfg(feature = "github")]
+            github: None,
             auto_restart: true,
         }
     }
@@ -74,13 +109,28 @@ impl Updater {
         &self.project
     }
 
-    /// Fetches and verifies the latest manifest, returning `Some` only if it is a
-    /// genuinely newer release for the running target.
+    /// Fetches and verifies the latest release description, returning `Some`
+    /// only if it is a genuinely newer release for the running target.
     pub fn check(&self) -> Result<Option<Available>> {
-        let signed = self
-            .transport
-            .latest_manifest(&self.project, &self.channel)?;
-        let manifest = Manifest::open_and_verify(&signed, &self.fingerprint)?;
+        let (fingerprint, transport) = match &self.source {
+            Source::Signed {
+                fingerprint,
+                transport,
+            } => (fingerprint, transport),
+            #[cfg(feature = "github")]
+            Source::Github(github) => {
+                // A GitHub release has no build identity, so "newer" is plain
+                // semver: a strictly greater version (never a downgrade).
+                let found = github
+                    .latest(&self.project, &self.channel)?
+                    .filter(|r| cmp_semver(&r.version, &self.cur_version) == Ordering::Greater);
+                return Ok(found.map(|r| Available {
+                    release: Release::Github(r),
+                }));
+            }
+        };
+        let signed = transport.latest_manifest(&self.project, &self.channel)?;
+        let manifest = Manifest::open_and_verify(&signed, fingerprint)?;
 
         if manifest.project != self.project {
             return Err(Error::VerifyFailed(format!(
@@ -98,7 +148,9 @@ impl Updater {
             return Ok(None);
         }
         if self.is_newer(&manifest) {
-            Ok(Some(Available { manifest }))
+            Ok(Some(Available {
+                release: Release::Signed(manifest),
+            }))
         } else {
             Ok(None)
         }
@@ -115,20 +167,32 @@ impl Updater {
     /// Like [`install`](Self::install) but writes to an explicit path (used by
     /// tests and for installing somewhere other than the running binary).
     pub fn install_to(&self, available: &Available, target: &Path) -> Result<()> {
-        let artifact = available.manifest.artifact_for_host().ok_or_else(|| {
-            Error::NoArtifact(format!(
-                "no artifact for {} ({})",
-                crate::TARGET,
-                crate::target::current_label()
-            ))
-        })?;
-        let stored = self.transport.fetch_artifact(
-            &self.project,
-            &self.channel,
-            &available.manifest.version,
-            artifact,
-        )?;
-        let binary = install::decode_and_verify(artifact, &stored)?;
+        let binary = match (&available.release, &self.source) {
+            (Release::Signed(manifest), Source::Signed { transport, .. }) => {
+                let artifact = manifest.artifact_for_host().ok_or_else(|| {
+                    Error::NoArtifact(format!(
+                        "no artifact for {} ({})",
+                        crate::TARGET,
+                        crate::target::current_label()
+                    ))
+                })?;
+                let stored = transport.fetch_artifact(
+                    &self.project,
+                    &self.channel,
+                    &manifest.version,
+                    artifact,
+                )?;
+                install::decode_and_verify(artifact, &stored)?
+            }
+            #[cfg(feature = "github")]
+            (Release::Github(release), Source::Github(github)) => github.download(release)?,
+            #[cfg(feature = "github")]
+            _ => {
+                return Err(Error::Other(
+                    "update was found by a different kind of updater".into(),
+                ));
+            }
+        };
         install::install_bytes(target, &binary)
     }
 
@@ -209,8 +273,10 @@ pub struct UpdaterBuilder {
     cur_date_tag: String,
     cur_git_tag: String,
     fingerprint: Option<Vec<u8>>,
-    fingerprint_err: Option<String>,
+    build_err: Option<String>,
     transport: Option<Box<dyn Transport>>,
+    #[cfg(feature = "github")]
+    github: Option<github::GithubSource>,
     auto_restart: bool,
 }
 
@@ -238,7 +304,8 @@ impl UpdaterBuilder {
     /// Sets the 32-byte expected project fingerprint (the trust anchor) from raw
     /// bytes. Most callers want [`fingerprint_hex`](Self::fingerprint_hex)
     /// instead; this is for when you already hold the bytes. Required (or use
-    /// `fingerprint_hex`).
+    /// `fingerprint_hex`) unless updating from GitHub Releases (the `github`
+    /// feature).
     pub fn fingerprint(mut self, fingerprint: impl Into<Vec<u8>>) -> Self {
         self.fingerprint = Some(fingerprint.into());
         self
@@ -251,7 +318,7 @@ impl UpdaterBuilder {
     pub fn fingerprint_hex(mut self, hex: &str) -> Self {
         match decode_hex(hex) {
             Some(bytes) => self.fingerprint = Some(bytes),
-            None => self.fingerprint_err = Some(format!("invalid fingerprint hex: {hex:?}")),
+            None => self.build_err = Some(format!("invalid fingerprint hex: {hex:?}")),
         }
         self
     }
@@ -265,6 +332,32 @@ impl UpdaterBuilder {
         self
     }
 
+    /// Updates from the **GitHub Releases** of `repo` instead of the signed
+    /// rsupd distribution — the mode for open source projects that publish their
+    /// binaries on GitHub (`rsupd publish --github`).
+    ///
+    /// `repo` is `owner/repo` or the repository URL, so
+    /// `.github(env!("CARGO_PKG_REPOSITORY"))` works; a malformed one is
+    /// reported by [`build`](Self::build).
+    ///
+    /// This mode has **no signature and needs no fingerprint**: the updater asks
+    /// the GitHub API for the channel's newest release and checks the downloaded
+    /// binary against the SHA-256 digest GitHub reports for it. Trust rests on
+    /// GitHub — anyone who can publish a release on `repo` can ship an update.
+    /// Versions are compared by semver alone ([`git_tag`](Self::git_tag) and
+    /// [`date_tag`](Self::date_tag) are unused). It cannot be combined with
+    /// [`transport`](Self::transport).
+    ///
+    /// Requires the **`github`** crate feature.
+    #[cfg(feature = "github")]
+    pub fn github(mut self, repo: &str) -> Self {
+        match github::GithubSource::new(repo) {
+            Ok(source) => self.github = Some(source),
+            Err(e) => self.build_err = Some(e.to_string()),
+        }
+        self
+    }
+
     /// Controls whether [`Updater::update`] restarts after installing (default
     /// `true`, matching goupd).
     pub fn auto_restart(mut self, yes: bool) -> Self {
@@ -274,23 +367,43 @@ impl UpdaterBuilder {
 
     /// Finalizes the updater, validating required fields.
     pub fn build(self) -> Result<Updater> {
-        if let Some(e) = self.fingerprint_err {
+        if let Some(e) = self.build_err {
             return Err(Error::Other(e));
         }
-        let fingerprint = self
-            .fingerprint
-            .ok_or_else(|| Error::NotConfigured("updater fingerprint not set".into()))?;
-        if fingerprint.len() != 32 {
-            return Err(Error::Other(format!(
-                "fingerprint must be 32 bytes, got {}",
-                fingerprint.len()
-            )));
-        }
-        // Default to the standard dist-go HttpTransport, derived from the
-        // fingerprint, so the common case needs no transport line.
-        let transport = self
-            .transport
-            .unwrap_or_else(|| Box::new(HttpTransport::new(&fingerprint)));
+        #[cfg(feature = "github")]
+        let github = match self.github {
+            Some(_) if self.transport.is_some() => {
+                return Err(Error::Other(
+                    "github() and transport() are mutually exclusive".into(),
+                ));
+            }
+            github => github.map(Source::Github),
+        };
+        #[cfg(not(feature = "github"))]
+        let github = None;
+        let source = match github {
+            Some(source) => source,
+            None => {
+                let fingerprint = self
+                    .fingerprint
+                    .ok_or_else(|| Error::NotConfigured("updater fingerprint not set".into()))?;
+                if fingerprint.len() != 32 {
+                    return Err(Error::Other(format!(
+                        "fingerprint must be 32 bytes, got {}",
+                        fingerprint.len()
+                    )));
+                }
+                // Default to the standard dist-go HttpTransport, derived from
+                // the fingerprint, so the common case needs no transport line.
+                let transport = self
+                    .transport
+                    .unwrap_or_else(|| Box::new(HttpTransport::new(&fingerprint)));
+                Source::Signed {
+                    fingerprint,
+                    transport,
+                }
+            }
+        };
         // An unset channel resolves to the default, matching a producer that
         // built with no explicit channel.
         let channel = if self.channel.is_empty() {
@@ -308,8 +421,7 @@ impl UpdaterBuilder {
             cur_version,
             cur_date_tag: self.cur_date_tag,
             cur_git_tag: self.cur_git_tag,
-            fingerprint,
-            transport,
+            source,
             auto_restart: self.auto_restart,
         })
     }

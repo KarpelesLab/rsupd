@@ -142,7 +142,72 @@ copy-paste fixes for whatever it finds.
 
 ---
 
+## Alternative: update from GitHub Releases (open source)
+
+If your project is open source and already lives on GitHub, you can skip rsupd's distribution
+system entirely — no signing identity, no fingerprint, no rsupd host. The binaries are attached to
+your GitHub Releases and the updater follows them.
+
+**Consumer** — enable the `github` feature (it is off by default, so projects on the signed mode
+don't pull in the JSON parsing it needs) and point the updater at the repository instead of giving
+it a fingerprint:
+
+```sh
+cargo add rsupd --features github
+```
+
+```rust
+fn updater() -> rsupd::Result<rsupd::Updater> {
+    rsupd::Updater::builder(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+        .github("owner/repo") // or .github(env!("CARGO_PKG_REPOSITORY"))
+        .build()
+}
+```
+
+Everything else (`update()`, `spawn_auto_update()`, `.channel(..)`, `.auto_restart(..)`) works the
+same.
+
+**Publisher** — upload with `gh` (which must be installed and authenticated):
+
+```sh
+cargo build --release                       # plus any `--target <triple>` builds
+rsupd publish --github                      # attach the binaries to release v<version>
+rsupd publish --setup-ci --full --github    # …or scaffold CI that does it on every `v*` tag
+```
+
+`rsupd publish --github` attaches one `<bin>_<target>.zst` asset per target (same naming as the
+signed package: `os_arch` by default, `--naming triple` for full triples) to the release tagged
+`v<version>` (override with `--tag`; `--repo` picks another repository), creating the release if it
+doesn't exist. The scaffolded CI job needs no secret — just the workflow's own token with
+`contents: write`.
+
+**How an update is checked.** The updater asks the GitHub API for the newest release, picks the
+asset for the running host, downloads it, and installs it only if its size and **SHA-256 match the
+digest the GitHub API reports for that asset**. A release is an update when its version (the tag,
+minus the `v`) is strictly greater by semver — there is no same-version rebuild detection here.
+
+- **Default channel** (`master`): the repository's *latest release* (GitHub never gives that title
+  to a draft or pre-release).
+- **Any other channel**, e.g. `beta`: the newest release whose version carries the channel as its
+  pre-release tag (`v1.2.3-beta`, exactly what `rsupd publish --github` produces on a `beta`
+  branch). It is published as a GitHub pre-release so stable users never see it.
+
+**What you are trusting.** This mode is *unsigned*: the trust anchor is GitHub (and TLS to it), not
+a key you hold. Anyone who can publish a release on the repository can ship an update to your
+users. For a project built and released by GitHub Actions that is the same trust you would already
+be placing in a signing key stored as a repository secret, which is why no signature is layered on
+top. If you want updates that not even your hosting can forge, use the signed mode below.
+
+Practical notes: the API is called unauthenticated (60 requests/hour per IP — an hourly check is
+well within it); assets uploaded before GitHub started computing digests (mid-2025) carry none and
+are refused; while a freshly created release has no assets yet, a check simply finds nothing.
+
+---
+
 ## Security model
+
+*(This section describes the default, signed mode. For the unsigned GitHub mode see
+[above](#alternative-update-from-github-releases-open-source).)*
 
 This is the part worth understanding in full.
 
@@ -301,7 +366,8 @@ The minimal integration is in [Getting started](#getting-started) above. A few d
   `master`, must match how you publish);
   `.git_tag(..)`/`.date_tag(..)` (optional build identity for same-version detection);
   `.transport(..)` (optional, defaults to the dist-go `HttpTransport`); `.auto_restart(bool)`
-  (default `true`).
+  (default `true`). With the `github` feature, `.github("owner/repo")` replaces the fingerprint and transport altogether —
+  see [updating from GitHub Releases](#alternative-update-from-github-releases-open-source).
 - **Applying updates:** `check()` returns an `Available` (`.version()`, `.git_tag()`) without
   touching disk; `install(&available)` swaps the binary in place; `update()` does check + install
   (+ restart unless disabled); `spawn_auto_update(immediate)` runs that on an hourly background
@@ -364,7 +430,8 @@ when the variable is unset. The publish job assumes the identity has no keychain
 Complete and in use: identity/signing, the signed manifest, packaging, the producer CLI
 (`id`, `build`, `publish`, `inspect`, `check`, `version`, `update`), the consumer updater
 (verify → download → hash-check → atomic swap → restart), the `HttpTransport` over `dist-go`, and
-the GitHub/GitLab CI scaffolding including the full sign-and-publish pipeline.
+the GitHub/GitLab CI scaffolding including the full sign-and-publish pipeline, and the unsigned
+GitHub Releases mode (`.github(..)` + `rsupd publish --github`).
 
 ## License
 

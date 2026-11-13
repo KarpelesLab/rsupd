@@ -1,4 +1,5 @@
-//! Producer-side upload of a built package to the KLB REST API.
+//! Producer-side upload of a built package to the KLB REST API, plus the
+//! staging of a release as loose GitHub Release assets for `publish --github`.
 //!
 //! [`crate::package::build_package`] turns a project's binaries into a signed
 //! zip; this module hands that zip to the platform's upload endpoint
@@ -7,11 +8,13 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 
 use klbfw::{Client, RestError};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::package::BuiltArtifacts;
 
 /// Renders a klbfw error with the platform's request id attached when present,
 /// so a server-side failure can be traced in the platform logs. The response
@@ -72,4 +75,25 @@ pub fn upload_package(filename: &str, bytes: Vec<u8>, verbose: bool) -> Result<V
     response
         .apply::<Value>()
         .map_err(|e| Error::Other(format!("decoding upload response: {e}")))
+}
+
+/// Writes each of `built`'s artifacts into `dir` (which must exist) under its
+/// own filename — the loose release assets the updater's GitHub mode (the
+/// `github` feature's `UpdaterBuilder::github`) looks for — and returns their
+/// paths. Uploading them is left to the caller (the CLI drives `gh`).
+pub fn stage_github_assets(built: &BuiltArtifacts, dir: &Path) -> Result<Vec<PathBuf>> {
+    built
+        .files
+        .iter()
+        .map(|(filename, stored)| {
+            let path = dir.join(filename);
+            std::fs::write(&path, stored)?;
+            Ok(path)
+        })
+        .collect()
+}
+
+/// The git tag of the GitHub release that carries `version`: `v<version>`.
+pub fn github_release_tag(version: &str) -> String {
+    format!("v{version}")
 }

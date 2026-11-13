@@ -97,3 +97,25 @@ fn detects_multiple_bins() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn github_mode_needs_no_fingerprint() {
+    let root = scratch("github");
+    write(
+        &root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    );
+    write(
+        &root.join("src/main.rs"),
+        "fn main() {\n\
+         \x20   let _ = rsupd::Updater::builder(\"app\", \"0.1.0\").github(\"o/app\").build();\n\
+         }\n",
+    );
+
+    // No identity exists, yet a GitHub-mode updater is fully wired.
+    let report = doctor::check(&root, None).unwrap();
+    assert_eq!(report.fingerprint, FingerprintState::NotNeeded);
+    assert!(report.ok());
+
+    std::fs::remove_dir_all(&root).ok();
+}

@@ -260,3 +260,47 @@ fn tampered_artifact_is_rejected() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn github_assets_are_the_unsigned_artifacts() {
+    let root = scratch("github-assets");
+    let binary = b"released through github".repeat(100);
+    stage_project(&root, &binary);
+
+    // No identity involved: the artifacts are built and staged as loose files.
+    let mut opts = BuildOptions::new(&root);
+    opts.channel = "beta".to_string();
+    let built = package::build_artifacts(&opts).expect("build artifacts");
+    assert_eq!(built.project, "demo");
+    assert_eq!(built.version, "1.0.0-beta");
+    assert_eq!(
+        rsupd::publish::github_release_tag(&built.version),
+        "v1.0.0-beta"
+    );
+
+    let dir = root.join("assets");
+    std::fs::create_dir(&dir).unwrap();
+    let assets = rsupd::publish::stage_github_assets(&built, &dir).unwrap();
+    assert_eq!(assets.len(), 1);
+    // Named <bin>_<os_arch>.zst — what the updater's GitHub mode looks for.
+    let expected = format!("demo_{}.zst", rsupd::current_label());
+    assert_eq!(assets[0], dir.join(&expected));
+    assert_eq!(built.artifacts[0].filename, expected);
+    assert_eq!(
+        std::fs::read(&assets[0]).unwrap().len() as u64,
+        built.artifacts[0].size
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "github")]
+#[test]
+fn github_builder_needs_no_fingerprint() {
+    let build = |repo: &str| Updater::builder("demo", "1.0.0").github(repo).build();
+    assert!(build("KarpelesLab/rsupd").is_ok());
+    assert!(build("https://github.com/KarpelesLab/rsupd").is_ok());
+    assert!(build("not a repo").is_err());
+    // Still required for the signed (default) mode.
+    assert!(Updater::builder("demo", "1.0.0").build().is_err());
+}

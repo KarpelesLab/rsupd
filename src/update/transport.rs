@@ -106,23 +106,15 @@ impl HttpTransport {
         let name = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(fingerprint);
         HttpTransport { name }
     }
-
-    /// GETs `url`, returning the body on a 2xx and an error otherwise.
-    fn get(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = rsurl::get(url).map_err(|e| Error::Other(format!("GET {url} failed: {e}")))?;
-        if !(200..300).contains(&resp.status) {
-            return Err(Error::Other(format!(
-                "GET {url} returned HTTP {}",
-                resp.status
-            )));
-        }
-        Ok(resp.body)
-    }
 }
 
 impl Transport for HttpTransport {
     fn latest_manifest(&self, _project: &str, channel: &str) -> Result<Vec<u8>> {
-        let body = self.get(&format!("{DIST_HOST}rust/{}/MANIFEST-{channel}", self.name))?;
+        let body = http_get(
+            &format!("{DIST_HOST}rust/{}/MANIFEST-{channel}", self.name),
+            false,
+            &[],
+        )?;
         if body.len() > MAX_MANIFEST_BYTES {
             return Err(Error::Malformed(format!(
                 "manifest exceeds sanity cap of {MAX_MANIFEST_BYTES} bytes ({} received)",
@@ -139,9 +131,34 @@ impl Transport for HttpTransport {
         version: &str,
         artifact: &Artifact,
     ) -> Result<Vec<u8>> {
-        self.get(&format!(
-            "{DIST_HOST}rust/{}/{version}/{}",
-            self.name, artifact.filename
-        ))
+        http_get(
+            &format!(
+                "{DIST_HOST}rust/{}/{version}/{}",
+                self.name, artifact.filename
+            ),
+            false,
+            &[],
+        )
     }
+}
+
+/// GETs `url` with the extra `headers`, returning the body on a 2xx and an error
+/// otherwise. Redirects are followed only when `follow` is set (GitHub serves
+/// release assets through one).
+pub(crate) fn http_get(url: &str, follow: bool, headers: &[(&str, &str)]) -> Result<Vec<u8>> {
+    let resp = rsurl::Request::get(url)
+        .and_then(|mut req| {
+            for (name, value) in headers {
+                req = req.header(name, value);
+            }
+            req.follow_redirects(follow).max_redirs(5).send()
+        })
+        .map_err(|e| Error::Other(format!("GET {url} failed: {e}")))?;
+    if !(200..300).contains(&resp.status) {
+        return Err(Error::Other(format!(
+            "GET {url} returned HTTP {}",
+            resp.status
+        )));
+    }
+    Ok(resp.body)
 }

@@ -102,13 +102,68 @@ pub struct BuiltPackage {
     pub bytes: Vec<u8>,
 }
 
+/// A release's artifacts, built but not yet signed or bundled: what
+/// [`build_package`] signs, and what `rsupd publish --github` uploads as is.
+pub struct BuiltArtifacts {
+    /// Cargo package name.
+    pub project: String,
+    /// Resolved release channel.
+    pub channel: String,
+    /// Release version, with a non-default channel folded in.
+    pub version: String,
+    /// Build stamp in `YYYYMMDDhhmmss` form.
+    pub date_tag: String,
+    /// Git short hash, or `""` outside a repository.
+    pub git_tag: String,
+    /// Release time, Unix seconds.
+    pub released: i64,
+    /// Per-target artifact descriptions.
+    pub artifacts: Vec<Artifact>,
+    /// Stored (compressed) bytes of each artifact, as `(filename, bytes)` in
+    /// the same order as [`artifacts`](Self::artifacts).
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
 /// Builds a signed release package for `identity`'s project.
 ///
-/// Discovers binaries, locates each requested target's compiled binary under
-/// `target/`, hashes and (optionally) zstd-compresses each, assembles a signed
-/// [`Manifest`], and bundles `manifest.cbor` plus every artifact into a
-/// store-mode zip.
+/// Builds the artifacts ([`build_artifacts`]), assembles a signed [`Manifest`],
+/// and bundles `manifest.cbor` plus every artifact into a store-mode zip.
 pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPackage> {
+    let built = build_artifacts(opts)?;
+
+    let mut zw = zip::ZipWriter::new();
+    for (filename, stored) in &built.files {
+        zw.add(filename, stored)?;
+    }
+
+    let manifest = Manifest {
+        v: FORMAT_VERSION,
+        project: identity.project().to_string(),
+        channel: built.channel,
+        version: built.version,
+        date_tag: built.date_tag,
+        git_tag: built.git_tag,
+        released: built.released,
+        idcard: identity.signed_idcard().to_vec(),
+        artifacts: built.artifacts,
+    };
+
+    let signed = manifest.sign(identity)?;
+    zw.add(MANIFEST_ENTRY, &signed)?;
+    let bytes = zw.finish()?;
+
+    Ok(BuiltPackage {
+        manifest,
+        signed_manifest: signed,
+        bytes,
+    })
+}
+
+/// Builds a release's artifacts without signing anything.
+///
+/// Discovers binaries, locates each requested target's compiled binary under
+/// `target/`, then hashes and (optionally) zstd-compresses each.
+pub fn build_artifacts(opts: &BuildOptions) -> Result<BuiltArtifacts> {
     let project = discover::discover(&opts.project_dir)?;
     let bins = if opts.bins.is_empty() {
         project.bins.clone()
@@ -151,7 +206,7 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
     // updater folds its own version the same way, so the two agree.
     let version = crate::version_with_channel(&base_version, &channel);
 
-    let mut zw = zip::ZipWriter::new();
+    let mut files = Vec::new();
     let mut artifacts = Vec::new();
 
     // Track which triple produced each artifact label so we can reject two
@@ -196,15 +251,15 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
 
             // Flat, slashless name: <bin>_<os>_<arch>.<ext>, e.g. rsupd_linux_amd64.zst.
             let filename = format!("{bin}_{label}.{ext}");
-            zw.add(&filename, &stored)?;
             artifacts.push(Artifact {
                 target: label.clone(),
-                filename,
+                filename: filename.clone(),
                 compression: compression.to_string(),
                 raw_size,
                 size: stored.len() as u64,
                 hash,
             });
+            files.push((filename, stored));
         }
     }
 
@@ -214,26 +269,15 @@ pub fn build_package(identity: &Identity, opts: &BuildOptions) -> Result<BuiltPa
         )));
     }
 
-    let manifest = Manifest {
-        v: FORMAT_VERSION,
-        project: identity.project().to_string(),
+    Ok(BuiltArtifacts {
+        project: project.name,
         channel,
         version,
         date_tag,
         git_tag,
         released,
-        idcard: identity.signed_idcard().to_vec(),
         artifacts,
-    };
-
-    let signed = manifest.sign(identity)?;
-    zw.add(MANIFEST_ENTRY, &signed)?;
-    let bytes = zw.finish()?;
-
-    Ok(BuiltPackage {
-        manifest,
-        signed_manifest: signed,
-        bytes,
+        files,
     })
 }
 
